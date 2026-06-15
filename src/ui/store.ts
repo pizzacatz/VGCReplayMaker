@@ -27,7 +27,7 @@ import {
   type InstanceReport,
   type MonRef,
 } from '../aggregation';
-import type { MatchEvent } from '../log';
+import type { MatchEvent, MatchLog } from '../log';
 
 export interface GameResult {
   winner: SideId;
@@ -661,6 +661,31 @@ export function solveTournament(t: Tournament): Map<string, InstanceReport> {
   }
 
   return db.solve();
+}
+
+/** Import a parsed Showdown replay log as a new match (two fresh teams) in the active tournament. */
+export function importShowdownLog(store: ScoutingStore, log: MatchLog): ScoutingStore {
+  const t = activeTournament(store);
+  if (!t) return store;
+  const toEntry = (m: { monId: string; species: string; maxHp: number; nickname?: string }): MonEntry => ({
+    monId: m.monId,
+    parsed: { species: m.species, level: 50, moves: [], alignment: 'neutral', spreadKnown: false, flags: [], ...(m.nickname ? { nickname: m.nickname } : {}) },
+    observedMaxHp: m.maxHp,
+  });
+  const teamA: TournamentTeam = { teamId: uid('tm'), player: log.sideA.player, rawPaste: '', mons: log.sideA.mons.map(toEntry) };
+  const teamB: TournamentTeam = { teamId: uid('tm'), player: log.sideB.player, rawPaste: '', mons: log.sideB.mons.map(toEntry) };
+  const leadsOf = (side: 'A' | 'B') => log.leads.filter((l) => l.side === side).sort((a, b) => a.position - b.position).map((l) => l.monId);
+  const game: Game = {
+    gameId: uid('g'),
+    gameNumber: 1,
+    leadsA: leadsOf('A'),
+    leadsB: leadsOf('B'),
+    events: log.events,
+    ...(log.result ? { result: { winner: log.result.winnerSide, reason: log.result.reason } } : {}),
+  };
+  const match: Match = { matchId: uid('m'), round: 'Imported (Showdown)', bestOf: 3, teamAId: teamA.teamId, teamBId: teamB.teamId, games: [game] };
+  const nt: Tournament = { ...t, teams: [...t.teams, teamA, teamB], matches: [...t.matches, match] };
+  return { ...replaceTournament(store, nt), activeMatchId: match.matchId, activeGameId: game.gameId };
 }
 
 // ── migration / load ───────────────────────────────────────────────────────────

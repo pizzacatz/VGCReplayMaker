@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { type Workspace } from './model';
+import { parseShowdownReplay } from '../import';
 import {
   activeGame,
   activeMatch,
@@ -9,6 +10,7 @@ import {
   emptyStore,
   exportMatch,
   importMatchBundle,
+  importShowdownLog,
   loadStore,
   matchStanding,
   standingLabel,
@@ -41,6 +43,7 @@ export function App() {
   const [tab, setTab] = useState<Tab>('teams');
   const fileRef = useRef<HTMLInputElement>(null);
   const matchFileRef = useRef<HTMLInputElement>(null);
+  const showdownRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     localStorage.setItem(STORE_KEY, JSON.stringify(store));
@@ -88,6 +91,20 @@ export function App() {
         setStore(loadStore(raw, raw)); // accepts a tournament store OR a legacy single-game workspace
       } catch (e) {
         alert(`Could not load: ${(e as Error).message}`);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const importShowdownFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const { log, warnings } = parseShowdownReplay(String(reader.result)); // accepts a raw log or a replay .html
+        setStore(importShowdownLog(store, log));
+        if (warnings.length) alert(`Imported with notes:\n\n${warnings.join('\n\n')}`);
+      } catch (e) {
+        alert(`Could not import Showdown replay: ${(e as Error).message}`);
       }
     };
     reader.readAsText(file);
@@ -150,6 +167,18 @@ export function App() {
             onChange={(e) => {
               const fs = e.target.files;
               if (fs && fs.length) void importMatchFiles(fs);
+              e.target.value = '';
+            }}
+          />
+          <button onClick={() => showdownRef.current?.click()} title="Import a Showdown replay (.html or pasted log) as a new match">⤒ Showdown</button>
+          <input
+            ref={showdownRef}
+            type="file"
+            accept=".html,.txt,.log,text/html,text/plain"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) importShowdownFile(f);
               e.target.value = '';
             }}
           />
