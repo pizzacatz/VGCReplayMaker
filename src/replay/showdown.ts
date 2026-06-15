@@ -61,7 +61,14 @@ export function toShowdownLog(log: MatchLog): string {
   }
 
   for (const ev of [...log.events].sort((a, b) => a.seq - b.seq)) emit(ev);
-  if (log.result) lines.push(`|win|${playerName(log.result.winnerSide)}`);
+  if (log.result) {
+    // Communicate HOW the game ended (a concession, not a random win).
+    const loser: Side = log.result.winnerSide === 'A' ? 'B' : 'A';
+    if (log.result.reason === 'forfeit') lines.push(`|-message|${playerName(loser)} forfeited.`);
+    else if (log.result.reason === 'timeout') lines.push(`|-message|${playerName(loser)} lost due to inactivity.`);
+    else if (log.result.reason === 'dq') lines.push(`|-message|${playerName(loser)} was disqualified.`);
+    lines.push(`|win|${playerName(log.result.winnerSide)}`);
+  }
   return lines.join('\n');
 
   function emit(ev: MatchEvent): void {

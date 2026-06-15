@@ -54,9 +54,17 @@ describe('toShowdownLog', () => {
     has('|faint|p2a: Garchomp');
   });
 
-  it('appends |win| when a result (e.g. forfeit) is recorded', () => {
+  it('communicates a forfeit (message before the win), not a silent win', () => {
     const won = toShowdownLog({ ...LOG, result: { winnerSide: 'B', reason: 'forfeit' } });
-    expect(won.includes('|win|AgentUpig')).toBe(true);
+    expect(won).toContain('|-message|very_beeg_rat forfeited.'); // the loser (side A) conceded
+    expect(won).toContain('|win|AgentUpig');
+    expect(won.indexOf('forfeited.')).toBeLessThan(won.indexOf('|win|')); // message precedes the win
+  });
+
+  it('a normal KO win carries no forfeit message', () => {
+    const ko = toShowdownLog({ ...LOG, result: { winnerSide: 'A', reason: 'ko' } });
+    expect(ko).not.toContain('forfeited');
+    expect(ko).toContain('|win|very_beeg_rat');
   });
 
   it('renders a faint HP as "0 fnt"', () => {
