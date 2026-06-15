@@ -115,8 +115,8 @@ try {
   const allInt = arr.every((d) => Number.isInteger(d));
   // Reverse-engineer the implied roll percentages from min damage:
   // mainline maps array index i (0..15) to roll (85+i)%. Confirm by ratio to max.
-  const min = arr[0];
-  const max = arr[n - 1];
+  const min = arr[0] ?? 0;
+  const max = arr[n - 1] ?? 0;
   add(
     'roll-count',
     n === 16 ? 'NOTE' : n === 15 ? 'PASS' : 'NOTE',
@@ -153,3 +153,5 @@ for (const f of findings.sort((a, b) => order[a.status] - order[b.status])) {
 const fails = findings.filter((f) => f.status === 'FAIL').length;
 console.log(`─────────────────────────────────────────────────`);
 console.log(`${findings.length} findings · ${fails} FAIL · see NOTEs for adaptations needed.\n`);
+
+export {}; // mark as a module so top-level await is permitted under tsc
