@@ -25,3 +25,6 @@ yarn-error.log*
 
 # Spike scratch output
 spike/out/
+
+# Local Netlify folder
+.netlify
