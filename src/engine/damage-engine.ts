@@ -62,6 +62,8 @@ export interface HitContext {
   singleTargetSpread?: boolean | undefined;
   /** false → defender was below full HP (suppresses Multiscale / Shadow Shield) */
   defenderFullHp?: boolean | undefined;
+  /** defender's ally has Friend Guard → ×0.75 damage taken */
+  friendGuard?: boolean | undefined;
 }
 
 export interface HitInput {
@@ -228,7 +230,7 @@ export function predictHit(
         gameType: 'Doubles',
         ...(hctx.weather ? { weather: hctx.weather as never } : {}),
         ...(hctx.terrain ? { terrain: hctx.terrain as never } : {}),
-        defenderSide: new Side({ isReflect: !!hctx.reflect, isLightScreen: !!hctx.lightScreen, isAuroraVeil: !!hctx.auroraVeil }),
+        defenderSide: new Side({ isReflect: !!hctx.reflect, isLightScreen: !!hctx.lightScreen, isAuroraVeil: !!hctx.auroraVeil, isFriendGuard: !!hctx.friendGuard }),
         ...(hctx.helpingHand ? { attackerSide: new Side({ isHelpingHand: true }) } : {}),
       })
     : undefined;
@@ -297,7 +299,7 @@ export function predictMultiHit(
         gameType: 'Doubles',
         ...(hctx.weather ? { weather: hctx.weather as never } : {}),
         ...(hctx.terrain ? { terrain: hctx.terrain as never } : {}),
-        defenderSide: new Side({ isReflect: !!hctx.reflect, isLightScreen: !!hctx.lightScreen, isAuroraVeil: !!hctx.auroraVeil }),
+        defenderSide: new Side({ isReflect: !!hctx.reflect, isLightScreen: !!hctx.lightScreen, isAuroraVeil: !!hctx.auroraVeil, isFriendGuard: !!hctx.friendGuard }),
         ...(hctx.helpingHand ? { attackerSide: new Side({ isHelpingHand: true }) } : {}),
       })
     : undefined;

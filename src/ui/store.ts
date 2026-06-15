@@ -626,7 +626,7 @@ export function solveTournament(t: Tournament): Map<string, InstanceReport> {
       const ws = workspaceFromGame(t, match, game);
       const log = buildLog(ws);
       const specs = new Map([...teamA.mons, ...teamB.mons].map((m) => [m.monId, toSpec(m.parsed)]));
-      const cleanHits: GameHit[] = extractCleanHits(log).map((h) => ({
+      const cleanHits: GameHit[] = extractCleanHits(log, specs).map((h) => ({
         attacker: ref(h.attackerId),
         defender: ref(h.defenderId),
         move: h.move,

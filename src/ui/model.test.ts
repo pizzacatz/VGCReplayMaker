@@ -255,6 +255,23 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
     expect(eot.some((e) => e.type === 'heal' && e.source === 'Grassy Terrain' && e.target === 'A0')).toBe(true);
   });
 
+  it('Toxic damage ramps n/16 with the toxic counter', () => {
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [
+        { eventId: 's', seq: 1, turn: 1, type: 'status_applied', target: 'A0', status: 'tox' },
+        { eventId: 't3', seq: 2, turn: 3, type: 'turn_start' }, // now the 3rd toxic end-of-turn
+      ],
+    };
+    const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const tox = endOfTurnEvents(ws, b)
+      .map((bld, i) => bld(i + 1, 3))
+      .find((e) => e.type === 'passive_hp_change' && e.source === 'Toxic' && e.target === 'A0');
+    expect(tox).toBeDefined();
+    if (tox && tox.type === 'passive_hp_change') expect(tox.hpBefore - tox.hpAfter).toBe(Math.floor((175 * 3) / 16)); // 3/16, not flat 1/8
+  });
+
   it('Flame Orb burns its holder at end of turn (when unstatused)', () => {
     const inc = entry('A', 0, 'Incineroar');
     inc.parsed.item = 'Flame Orb';

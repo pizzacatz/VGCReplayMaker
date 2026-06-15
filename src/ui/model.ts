@@ -139,7 +139,7 @@ export function runSolve(ws: Workspace): SolveResult {
   const gen = championsGen();
   const log = buildLog(ws);
   const specs = specsOf(ws);
-  const hits = extractCleanHits(log);
+  const hits = extractCleanHits(log, specs);
   const speed = extractSpeedFacts(log, gen, specs).facts.map((f) => ({
     firstId: f.first,
     secondId: f.second,
@@ -595,7 +595,7 @@ export function endOfTurnEvents(ws: Workspace, board: ReplayState): EventBuilder
     else if (!magicGuard) {
       if (status === 'brn') push('Burn', -Math.floor(max / 16), 'passive_hp_change');
       else if (status === 'psn') push('Poison', -Math.floor(max / 8), 'passive_hp_change');
-      else if (status === 'tox') push('Poison', -Math.floor(max / 8), 'passive_hp_change');
+      else if (status === 'tox') push('Toxic', -Math.floor((max * toxicCounter(ws, monId, curTurn)) / 16), 'passive_hp_change'); // ramps n/16
     }
     // Partial-trapping residual (Infestation, Bind, Fire Spin, Sand Tomb, Magma Storm, …)
     if (!magicGuard) {
@@ -609,6 +609,24 @@ export function endOfTurnEvents(ws: Workspace, board: ReplayState): EventBuilder
     }
   }
   return out;
+}
+
+/**
+ * Badly-poisoned (toxic) turn counter for the end-of-turn ramp (n/16). Counts from
+ * the latest toxic application or the mon's most recent switch-in (a switch resets
+ * the counter), capped at the current turn.
+ */
+function toxicCounter(ws: Workspace, monId: string, curTurn: number): number {
+  let toxTurn = -1;
+  let lastInTurn = -1;
+  let cured = false;
+  for (const e of [...ws.events].sort((a, b) => a.seq - b.seq)) {
+    if (e.type === 'status_applied' && e.target === monId && e.status === 'tox') { toxTurn = e.turn; cured = false; }
+    else if (e.type === 'status_cured' && e.target === monId && e.status === 'tox') cured = true;
+    else if (e.type === 'switch' && e.in === monId) lastInTurn = e.turn;
+  }
+  if (toxTurn < 0 || cured) return 1;
+  return Math.max(1, curTurn - Math.max(toxTurn, lastInTurn) + 1);
 }
 
 /** Whether a move applies the partial-trap volatile (data-driven, no hardcoded list). */

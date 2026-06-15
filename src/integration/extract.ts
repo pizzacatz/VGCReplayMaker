@@ -50,9 +50,26 @@ function paradoxBoostAt(log: MatchLog, monId: string, seq: number): string | und
   return stat;
 }
 
+/** The mon active alongside `monId` on its side just before `seq` (its ally), if any. */
+function allyAt(log: MatchLog, monId: string, seq: number): string | undefined {
+  const side = sideOfMon(log, monId);
+  const occ: Record<number, string | undefined> = {};
+  for (const l of log.leads) if (l.side === side) occ[l.position] = l.monId;
+  for (const ev of [...log.events].sort((a, b) => a.seq - b.seq)) {
+    if (ev.seq >= seq) break;
+    if (ev.type === 'switch' && ev.side === side) occ[ev.position] = ev.in;
+    if (ev.type === 'faint') for (const p of [0, 1]) if (occ[p] === ev.target) occ[p] = undefined;
+  }
+  const pos = occ[0] === monId ? 0 : occ[1] === monId ? 1 : undefined;
+  if (pos === undefined) return undefined;
+  return occ[pos === 0 ? 1 : 0];
+}
+
 /** The reconstructed field/boosts/burn/Helping-Hand/HP at the moment of a hit (always Doubles). */
-function contextAt(log: MatchLog, ev: Extract<MatchEvent, { type: 'damage' }>): HitContext {
+function contextAt(log: MatchLog, ev: Extract<MatchEvent, { type: 'damage' }>, specs?: Map<string, MonSpec>): HitContext {
   const { attacker, defender, seq, turn } = ev;
+  const ally = specs ? allyAt(log, defender, seq) : undefined;
+  const friendGuard = ally ? specs!.get(ally)?.ability === 'Friend Guard' : false;
   const dSide = sideOfMon(log, defender);
   const aSide = sideOfMon(log, attacker);
   const weather = WEATHERS.find((w) => isActiveAt(log, w, undefined, seq));
@@ -86,6 +103,7 @@ function contextAt(log: MatchLog, ev: Extract<MatchEvent, { type: 'damage' }>): 
     ...(helpingHand ? { helpingHand: true } : {}),
     ...(singleTargetSpread ? { singleTargetSpread: true } : {}),
     ...(defenderFullHp ? {} : { defenderFullHp: false }),
+    ...(friendGuard ? { friendGuard: true } : {}),
   };
 }
 
@@ -99,8 +117,8 @@ function megaFormeAt(log: MatchLog, monId: string, seq: number): string | undefi
   return forme;
 }
 
-/** Clean damage events → solver hits. Composite/unresolved are excluded (§D3). */
-export function extractCleanHits(log: MatchLog): SolverHit[] {
+/** Clean damage events → solver hits. Composite/unresolved are excluded (§D3). `specs` (optional) enables ability-dependent context (Friend Guard). */
+export function extractCleanHits(log: MatchLog, specs?: Map<string, MonSpec>): SolverHit[] {
   const hits: SolverHit[] = [];
   for (const ev of [...log.events].sort((a, b) => a.seq - b.seq)) {
     if (ev.type !== 'damage' || ev.status !== 'clean') continue;
@@ -117,7 +135,7 @@ export function extractCleanHits(log: MatchLog): SolverHit[] {
       ...(dForme ? { defenderSpecies: dForme } : {}),
       source: `T${ev.turn}`, // game/round context prepended by the caller (drill-down)
       eventId: ev.eventId, // lets the UI exclude this exact hit
-      context: contextAt(log, ev), // field/boosts/burn/Helping-Hand/spread/HP (Doubles)
+      context: contextAt(log, ev, specs), // field/boosts/burn/Helping-Hand/spread/HP/Friend-Guard (Doubles)
       ...(ev.hits && ev.hits > 1 ? { hits: ev.hits } : {}), // multi-hit → convolution factor
     });
   }

@@ -301,3 +301,43 @@ describe('Damage context: Helping Hand, single-target spread, Multiscale', () =>
     expect(h2!.context?.defenderFullHp).toBe(false); // inc was at 100/170
   });
 });
+
+describe('Friend Guard + the spread 2-target edge', () => {
+  const clefSpec: MonSpec = { species: 'Clefable', alignment: 'neutral', ability: 'Friend Guard' };
+  const fgLog: MatchLog = {
+    matchId: 'fg', format: 'Champions Reg M-A',
+    sideA: { player: 'W', mons: [{ monId: 'inc', species: 'Incineroar', maxHp: 170 }] },
+    sideB: { player: 'O', mons: [{ monId: 'gar', species: 'Garchomp', maxHp: 183 }, { monId: 'clef', species: 'Clefable', maxHp: 180 }] },
+    leads: [{ side: 'A', position: 0, monId: 'inc' }, { side: 'B', position: 0, monId: 'gar' }, { side: 'B', position: 1, monId: 'clef' }],
+    events: [
+      { eventId: 'm', seq: 1, turn: 1, type: 'move_used', user: 'inc', move: 'Flare Blitz', targets: ['gar'] },
+      { eventId: 'd', seq: 2, turn: 1, type: 'damage', attacker: 'inc', move: 'Flare Blitz', defender: 'gar', hpBefore: 183, hpAfter: 130, crit: false, status: 'clean' },
+    ],
+  };
+
+  it('reconstructs the defender ally’s Friend Guard only when sheets (specs) are given', () => {
+    const specs = new Map<string, MonSpec>([['inc', incSpec], ['gar', garSpec], ['clef', clefSpec]]);
+    expect(extractCleanHits(fgLog, specs)[0]!.context?.friendGuard).toBe(true);
+    expect(extractCleanHits(fgLog)[0]!.context?.friendGuard).toBeUndefined(); // no specs → not inferred
+  });
+
+  it('predictHit applies Friend Guard (×0.75)', () => {
+    const base = predictHit(gen, { attacker: incSpec, attackerSp: 0, defender: garSpec, defenderSp: 0, move: 'Flare Blitz', context: {} }).rolls[7]!;
+    const fg = predictHit(gen, { attacker: incSpec, attackerSp: 0, defender: garSpec, defenderSp: 0, move: 'Flare Blitz', context: { friendGuard: true } }).rolls[7]!;
+    expect(fg).toBeLessThan(base);
+  });
+
+  it('a spread move that hit TWO targets keeps the 0.75 (not flagged single-target)', () => {
+    const log: MatchLog = {
+      matchId: 'sp2', format: 'Champions Reg M-A',
+      sideA: { player: 'W', mons: [{ monId: 'ttar', species: 'Tyranitar', maxHp: 175 }] },
+      sideB: { player: 'O', mons: [{ monId: 'gar', species: 'Garchomp', maxHp: 183 }, { monId: 'ape', species: 'Annihilape', maxHp: 175 }] },
+      leads: [{ side: 'A', position: 0, monId: 'ttar' }, { side: 'B', position: 0, monId: 'gar' }, { side: 'B', position: 1, monId: 'ape' }],
+      events: [
+        { eventId: 'm', seq: 1, turn: 1, type: 'move_used', user: 'ttar', move: 'Rock Slide', targets: ['gar', 'ape'], isSpread: true },
+        { eventId: 'd', seq: 2, turn: 1, type: 'damage', attacker: 'ttar', move: 'Rock Slide', defender: 'gar', hpBefore: 183, hpAfter: 150, crit: false, status: 'clean' },
+      ],
+    };
+    expect(extractCleanHits(log)[0]!.context?.singleTargetSpread).toBeUndefined();
+  });
+});

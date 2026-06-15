@@ -27,7 +27,7 @@ export function logToGame(log: MatchLog, meta: GameMeta, gen: Gen, specs: Map<st
     monId,
   });
 
-  const cleanHits: GameHit[] = extractCleanHits(log).map((h) => ({
+  const cleanHits: GameHit[] = extractCleanHits(log, specs).map((h) => ({
     attacker: ref(h.attackerId),
     defender: ref(h.defenderId),
     move: h.move,
