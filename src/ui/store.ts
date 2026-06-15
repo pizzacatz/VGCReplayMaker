@@ -599,7 +599,7 @@ export function importMatchBundle(store: ScoutingStore, bundle: MatchBundle): Sc
 // ── tournament-wide solve (aggregate every game per opponent) ──────────────────
 
 /** All games' clean hits feed ONE solve per team; returns each team's report. */
-export function solveTournament(t: Tournament): Map<string, InstanceReport> {
+export function solveTournament(t: Tournament, onProgress?: (done: number, total: number) => void): Map<string, InstanceReport> {
   const gen = championsGen();
   const db = new ScoutingDB();
   db.addTournament({ tournamentId: t.tournamentId, name: t.name, date: t.date, format: t.format });
@@ -660,7 +660,7 @@ export function solveTournament(t: Tournament): Map<string, InstanceReport> {
     }
   }
 
-  return db.solve();
+  return db.solve({}, onProgress);
 }
 
 /** Import a parsed Showdown replay log as a new match (two fresh teams) in the active tournament. */

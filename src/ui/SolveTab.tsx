@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import type { MonReport, SolveResult } from '../solver';
 import type { InstanceReport } from '../aggregation';
-import { runSolve, type Workspace } from './model';
-import { activeTournament, setDamageStatus, solveTournament, teamById, toggleGameExcluded, tournamentSources, type ScoutingStore } from './store';
+import { type Workspace } from './model';
+import { activeTournament, setDamageStatus, teamById, toggleGameExcluded, tournamentSources, type ScoutingStore } from './store';
+import { solveGameAsync, solveTournamentAsync } from './solveWorker';
 
 type Scope = 'game' | 'tournament';
 
@@ -11,29 +12,31 @@ export function SolveTab({ ws, store, setStore }: { ws: Workspace; store: Scouti
   const [result, setResult] = useState<SolveResult | null>(null);
   const [tResult, setTResult] = useState<Map<string, InstanceReport> | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | undefined>();
 
-  const solve = () => {
+  // Runs in a Web Worker so the tab stays responsive; progress updates as hits resolve.
+  const solve = async () => {
     setBusy(true);
     setError(undefined);
     setResult(null);
     setTResult(null);
-    // Yield so the "Solving…" state paints before the (synchronous) solve runs.
-    setTimeout(() => {
-      try {
-        if (scope === 'game') {
-          setResult(runSolve(ws));
-        } else {
-          const t = activeTournament(store);
-          if (!t) throw new Error('no active tournament');
-          setTResult(solveTournament(t));
-        }
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        setBusy(false);
+    setProgress(null);
+    const onProgress = (done: number, total: number) => setProgress({ done, total });
+    try {
+      if (scope === 'game') {
+        setResult(await solveGameAsync(ws, onProgress));
+      } else {
+        const t = activeTournament(store);
+        if (!t) throw new Error('no active tournament');
+        setTResult(await solveTournamentAsync(t, onProgress));
       }
-    }, 20);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
   };
 
   const t = activeTournament(store);
@@ -62,6 +65,25 @@ export function SolveTab({ ws, store, setStore }: { ws: Workspace; store: Scouti
           <span className="tag bounded">bounded</span> <span className="tag guessed">guessed</span>
         </span>
       </div>
+
+      {busy && (
+        <div className="controls" aria-label="solve progress">
+          <div style={{ flex: 1, maxWidth: 320, height: 8, background: 'var(--panel2)', borderRadius: 4, overflow: 'hidden' }}>
+            <div
+              style={{
+                width: progress && progress.total ? `${Math.round((progress.done / progress.total) * 100)}%` : '15%',
+                height: '100%',
+                background: 'var(--accent)',
+                transition: 'width 120ms linear',
+              }}
+            />
+          </div>
+          <span className="muted" style={{ fontSize: 12 }}>
+            {progress ? `${progress.done}/${progress.total} hits` : 'preparing…'} · runs off the UI thread
+          </span>
+        </div>
+      )}
+
       {error && <p className="error">Error: {error}</p>}
 
       {scope === 'tournament' && t && <SourcesPanel store={store} setStore={setStore} />}

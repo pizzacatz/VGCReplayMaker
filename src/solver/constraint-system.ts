@@ -363,6 +363,7 @@ export class ConstraintSystem {
     hits: SolverHit[],
     speedFacts: SpeedFact[] = [],
     registry: ExceptionRegistry = championsExceptions,
+    onProgress?: (done: number, total: number) => void,
   ) {
     const specs = this.specs;
     for (const mon of mons) {
@@ -390,6 +391,7 @@ export class ConstraintSystem {
       return { ...base, species, ...(ability ? { ability } : {}) };
     };
 
+    let hitsDone = 0;
     for (const hit of hits) {
       const attackerBase = specs.get(hit.attackerId);
       const defenderBase = specs.get(hit.defenderId);
@@ -425,6 +427,7 @@ export class ConstraintSystem {
           `dmg:${hit.attackerId}->${hit.defenderId} ${hit.move}=${hit.observedDamage}`,
         ),
       );
+      onProgress?.(++hitsDone, hits.length);
     }
 
     for (const fact of speedFacts) {

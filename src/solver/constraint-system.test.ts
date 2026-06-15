@@ -217,3 +217,18 @@ describe('Field & boosts in the damage factor', () => {
     expect(without.domains.get('A')!.get('atk')!).not.toContain(8); // ignoring it demands far more Attack
   }, SLOW);
 });
+
+describe('progress callback', () => {
+  it('onProgress fires once per hit during construction', () => {
+    const rolls = predictHit(gen, { attacker: incineroar, attackerSp: 12, defender: garchomp, defenderSp: 8, move: 'Flare Blitz' }).rolls;
+    const calls: Array<[number, number]> = [];
+    new ConstraintSystem(gen, [
+      { id: 'A', spec: incineroar, observedMaxHp: 95 + 75 },
+      { id: 'D', spec: garchomp, observedMaxHp: 183 },
+    ], [
+      { attackerId: 'A', defenderId: 'D', move: 'Flare Blitz', observedDamage: rolls[3]! },
+      { attackerId: 'A', defenderId: 'D', move: 'Flare Blitz', observedDamage: rolls[7]! },
+    ], [], undefined, (done, total) => calls.push([done, total]));
+    expect(calls).toEqual([[1, 2], [2, 2]]);
+  });
+});

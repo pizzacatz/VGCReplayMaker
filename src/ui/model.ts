@@ -135,7 +135,7 @@ export function specsOf(ws: Workspace): Map<string, MonSpec> {
 }
 
 /** Run the full solve from the workspace (extract clean hits + speed facts → solve). */
-export function runSolve(ws: Workspace): SolveResult {
+export function runSolve(ws: Workspace, onProgress?: (done: number, total: number) => void): SolveResult {
   const gen = championsGen();
   const log = buildLog(ws);
   const specs = specsOf(ws);
@@ -151,7 +151,7 @@ export function runSolve(ws: Workspace): SolveResult {
     ...(f.secondControl ? { secondControl: f.secondControl } : {}),
   }));
   const mons = allMons(ws).map((m) => ({ id: m.monId, spec: toSpec(m.parsed), observedMaxHp: m.observedMaxHp }));
-  const system = new ConstraintSystem(gen, mons, hits, speed);
+  const system = new ConstraintSystem(gen, mons, hits, speed, undefined, onProgress);
   for (const m of allMons(ws)) {
     if (!m.parsed.spSpread) continue;
     for (const stat of ['atk', 'def', 'spa', 'spd', 'spe'] as const) {

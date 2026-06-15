@@ -147,7 +147,7 @@ export class ScoutingDB {
   }
 
   /** Run one global solve across all instances sharing games; return per-instance reports. */
-  solve(options: SolveOptions = {}): Map<string, InstanceReport> {
+  solve(options: SolveOptions = {}, onProgress?: (done: number, total: number) => void): Map<string, InstanceReport> {
     const gen = championsGen();
 
     const mons: SolverMon[] = [];
@@ -210,7 +210,7 @@ export class ScoutingDB {
       }
     }
 
-    const system = new ConstraintSystem(gen, mons, hits, speedFacts);
+    const system = new ConstraintSystem(gen, mons, hits, speedFacts, undefined, onProgress);
 
     // Apply known spreads: the solver does not re-solve a confirmed build.
     for (const instance of this.instances.values()) {
