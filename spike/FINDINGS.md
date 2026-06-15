@@ -52,3 +52,13 @@ Two findings while wiring the shared damage engine:
 2. **The calc ignores direct stat mutation** (`attacker.stats.atk = …` had no effect on damage). So candidate stats are fed via the supported **`evs (=8×SP) + nature (=alignment)`** path. Because the spike proved the calc's stat formula equals our conversion module exactly, this is consistent — and `buildMon` now **asserts** `calc stat === conversion stat` on every prediction, turning R5 into a checked invariant that will trip immediately on any future Champions stat-formula exception.
 
 **Implication for design:** the exception infrastructure (`ExceptionRegistry` in `src/engine/champions.ts`) is the single place discovered ability/odds deviations get registered; the shared `predictHit` engine applies them, so the solver and replay inherit every exception identically (Constitution §A4).
+
+---
+
+## Addendum — Spike 3 (Part-3 viewer coverage, T3.4)
+
+`@pkmn/img` `Sprites.getPokemon(name, {gen:9})` returns sprite URLs for every species tested — Incineroar, Garchomp, **Annihilape** (Gen 9), Zapdos, Giratina. Since Champions species are mainline Gen-9 entries (Spike 2) and footage self-enforces legality, the `@pkmn`/Showdown viewer ecosystem covers them. **The primary Part-3 risk (Replay §6 — does the viewer have Champions data?) is low.**
+
+Remaining viewer unknowns are browser-time only — move animations and the live `@pkmn/client` render loop — verifiable when a real viewer is wired up, with the **custom-renderer fallback** ready. The protocol-as-interface design (`src/replay/protocol.ts` emits the message stream; the renderer sits behind it) makes that swap cheap, so it does not block the headless replay core (translation + deterministic-rebuild stepping), which is built and tested (Validation §5).
+
+`@pkmn/img` was installed only for this probe and removed afterward.
