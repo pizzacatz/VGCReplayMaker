@@ -43,8 +43,11 @@ describe('§7 — evidence summary', () => {
       const result = recoverySystem().solve();
       const A = result.mons.find((m) => m.monId === 'A')!;
       const D = result.mons.find((m) => m.monId === 'D')!;
-      expect(D.evidence).toEqual({ cleanHitsIn: 1, cleanHitsOut: 0, speedFacts: 0 });
-      expect(A.evidence).toEqual({ cleanHitsIn: 0, cleanHitsOut: 1, speedFacts: 0 });
+      expect(D.evidence).toMatchObject({ cleanHitsIn: 1, cleanHitsOut: 0, speedFacts: 0 });
+      expect(A.evidence).toMatchObject({ cleanHitsIn: 0, cleanHitsOut: 1, speedFacts: 0 });
+      // the drill-down lists exactly those hits, from each mon's perspective
+      expect(D.evidence.hits.filter((h) => h.role === 'taken')).toHaveLength(1);
+      expect(A.evidence.hits.filter((h) => h.role === 'dealt')).toHaveLength(1);
     },
     SLOW,
   );

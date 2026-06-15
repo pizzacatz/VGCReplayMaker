@@ -136,6 +136,30 @@ function MonCard({ report }: { report: MonReport }) {
         {report.evidence.cleanHitsIn} clean hits taken · {report.evidence.cleanHitsOut} dealt · {report.evidence.speedFacts} speed facts
       </div>
 
+      {report.evidence.hits.length > 0 && (
+        <details style={{ marginTop: 6 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 12.5 }}>
+            Show the {report.evidence.hits.length} hits used to derive this
+          </summary>
+          <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, marginTop: 4 }}>
+            {[...report.evidence.hits]
+              .sort((a, b) => a.stat.localeCompare(b.stat))
+              .map((h, i) => (
+                <div key={i} style={{ padding: '1px 0' }}>
+                  <span className="tag bounded" style={{ marginRight: 4 }}>{h.stat.toUpperCase()}</span>
+                  {h.role === 'taken' ? '⮜ took ' : '⮞ dealt '}
+                  <strong>{h.move}</strong> {h.role === 'taken' ? 'from' : 'to'} {h.opponentSpecies} ·{' '}
+                  {h.observedDamage} dmg
+                  {h.source ? <span className="muted"> · {h.source}</span> : null}
+                </div>
+              ))}
+            <div className="muted" style={{ marginTop: 3 }}>
+              taken → constrains its defenses · dealt → its offenses
+            </div>
+          </div>
+        </details>
+      )}
+
       {report.candidates.length > 0 && (
         <>
           <h2>Candidates</h2>

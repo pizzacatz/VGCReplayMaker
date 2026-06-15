@@ -141,6 +141,23 @@ describe('bridge — log → aggregation Game', () => {
   });
 });
 
+describe('Evidence drill-down — exactly which hits derive a stat', () => {
+  it('lists the contributing clean hits with move, damage, opponent and source', () => {
+    const hits = extractCleanHits(buildRoundTripLog());
+    const report = new ConstraintSystem(gen, [
+      { id: 'inc', spec: incSpec, observedMaxHp: 170 },
+      { id: 'gar', spec: garSpec, observedMaxHp: 203 },
+    ], hits).solve({ method: 'exact' }).mons.find((m) => m.monId === 'gar')!;
+
+    const taken = report.evidence.hits.filter((h) => h.role === 'taken');
+    expect(taken).toHaveLength(3); // Garchomp took three clean Flare Blitz
+    expect(taken.every((h) => h.stat === 'def')).toBe(true); // physical → constrains Def
+    expect(taken.every((h) => h.move === 'Flare Blitz' && h.opponentSpecies === 'Incineroar')).toBe(true);
+    expect(taken.every((h) => typeof h.observedDamage === 'number' && h.observedDamage > 0)).toBe(true);
+    expect(taken.every((h) => /^T\d+$/.test(h.source ?? ''))).toBe(true); // turn-tagged provenance
+  });
+});
+
 describe('Mega forme — post-Mega hits use the Mega forme stats (extraction)', () => {
   // A log where Mawile Mega-Evolves on turn 1, then lands a clean Iron Head.
   function megaLog(observedDamage: number): MatchLog {

@@ -67,6 +67,8 @@ export interface GameHit {
   /** Mega forme of attacker/defender at hit time, if any (uses that forme's stats). */
   attackerSpecies?: string;
   defenderSpecies?: string;
+  /** provenance label for the evidence drill-down (e.g. "R7 G2 · T3"). */
+  source?: string;
 }
 
 export interface GameSpeedFact {
@@ -180,6 +182,7 @@ export class ScoutingDB {
           ...(hit.crit !== undefined ? { crit: hit.crit } : {}),
           ...(hit.attackerSpecies ? { attackerSpecies: hit.attackerSpecies } : {}),
           ...(hit.defenderSpecies ? { defenderSpecies: hit.defenderSpecies } : {}),
+          ...(hit.source ? { source: hit.source } : {}),
         });
       }
       for (const sf of game.speedFacts ?? []) {

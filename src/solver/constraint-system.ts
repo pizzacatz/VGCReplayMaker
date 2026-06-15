@@ -46,6 +46,8 @@ export interface SolverHit {
    *  that forme's base stats + ability for THIS hit; the SP variable is unchanged. */
   attackerSpecies?: string | undefined;
   defenderSpecies?: string | undefined;
+  /** opaque provenance label for the drill-down (e.g. "R7 G2 · T3"); UI-formatted upstream. */
+  source?: string | undefined;
 }
 
 /** A multiplicative speed-control modifier, applied as floor(speed × num / den). */
@@ -109,6 +111,20 @@ export interface SpreadCandidate {
   confidencePct: number;
 }
 
+/** One contributing clean hit, for the evidence drill-down (exactly what's used). */
+export interface EvidenceHit {
+  /** 'dealt' constrains this mon's offense; 'taken' constrains its defense */
+  role: 'dealt' | 'taken';
+  /** which of THIS mon's stats the hit touches */
+  stat: NonHpStat;
+  move: string;
+  observedDamage: number;
+  /** the opposing mon (display species) */
+  opponentSpecies: string;
+  /** provenance label, e.g. "R7 G2 · T3" (undefined for ad-hoc hits) */
+  source?: string;
+}
+
 /** Provenance: how much evidence informed this mon's result (Output Contract §7). */
 export interface EvidenceSummary {
   /** clean hits this mon TOOK (constrain its defenses) */
@@ -117,6 +133,8 @@ export interface EvidenceSummary {
   cleanHitsOut: number;
   /** same-bracket move-order facts touching this mon's Speed */
   speedFacts: number;
+  /** the actual contributing hits — what exactly is being used (drill-down) */
+  hits: EvidenceHit[];
 }
 
 /** A loose stat plus what footage would tighten it (Output Contract §8). */
@@ -195,6 +213,9 @@ interface HitFactor {
   offStat: NonHpStat;
   defStat: NonHpStat;
   weights: Map<string, number>;
+  move: string;
+  observedDamage: number;
+  source?: string | undefined;
 }
 
 interface SpeedRelation {
@@ -378,6 +399,9 @@ export class ConstraintSystem {
         offStat: factor.offensiveStat as NonHpStat,
         defStat: factor.defensiveStat as NonHpStat,
         weights,
+        move: hit.move,
+        observedDamage: hit.observedDamage,
+        source: hit.source,
       });
       this.touched.get(hit.attackerId)!.add(factor.offensiveStat as NonHpStat);
       this.touched.get(hit.defenderId)!.add(factor.defensiveStat as NonHpStat);
@@ -564,10 +588,18 @@ export class ConstraintSystem {
   }
 
   private computeEvidence(monId: string): EvidenceSummary {
+    const hits: EvidenceHit[] = [];
+    for (const f of this.hitFactors) {
+      if (f.defenderId === monId)
+        hits.push({ role: 'taken', stat: f.defStat, move: f.move, observedDamage: f.observedDamage, opponentSpecies: this.specs.get(f.attackerId)?.species ?? f.attackerId, ...(f.source ? { source: f.source } : {}) });
+      if (f.attackerId === monId)
+        hits.push({ role: 'dealt', stat: f.offStat, move: f.move, observedDamage: f.observedDamage, opponentSpecies: this.specs.get(f.defenderId)?.species ?? f.defenderId, ...(f.source ? { source: f.source } : {}) });
+    }
     return {
       cleanHitsIn: this.hitFactors.filter((f) => f.defenderId === monId).length,
       cleanHitsOut: this.hitFactors.filter((f) => f.attackerId === monId).length,
       speedFacts: this.speedRelations.filter((s) => s.firstId === monId || s.secondId === monId).length,
+      hits,
     };
   }
 

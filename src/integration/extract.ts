@@ -37,6 +37,7 @@ export function extractCleanHits(log: MatchLog): SolverHit[] {
       ...(ev.crit ? { crit: ev.crit } : {}),
       ...(aForme ? { attackerSpecies: aForme } : {}),
       ...(dForme ? { defenderSpecies: dForme } : {}),
+      source: `T${ev.turn}`, // game/round context prepended by the caller (drill-down)
     });
   }
   return hits;
