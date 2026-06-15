@@ -192,9 +192,18 @@ export interface TargetPlan {
 /** Resolve a move's legal targets from dex target data — foes first (the smart bit). */
 export function planTargets(move: string, actorMonId: string, board: ReplayState): TargetPlan {
   // @pkmn/dex has full move targeting data (the calc omits `target` for status moves).
-  const data = Dex.moves.get(move);
-  const targetType = data.exists ? data.target : 'normal';
-  const isDamaging = data.category !== 'Status';
+  // Defensive: fall back to a single foe-targeting damaging move if lookup fails.
+  let targetType = 'normal';
+  let isDamaging = true;
+  try {
+    const data = Dex.moves.get(move);
+    if (data.exists) {
+      targetType = data.target;
+      isDamaging = data.category !== 'Status';
+    }
+  } catch {
+    /* keep defaults */
+  }
 
   const actorSlot = slotOfMon(board, actorMonId);
   const actorSide: Side = actorSlot ? sideOfSlot(actorSlot) : 'A';

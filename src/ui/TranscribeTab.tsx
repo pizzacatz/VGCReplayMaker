@@ -39,7 +39,17 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   if (ws.sideA.mons.length === 0 && ws.sideB.mons.length === 0) {
     return <div className="panel">Add teams first (Teams tab).</div>;
   }
-  if (!board) return <div className="panel error">The event log is inconsistent (a hit references an inactive mon). Remove the offending event.</div>;
+  if (!board) {
+    return (
+      <div className="panel error">
+        <p>The event log is inconsistent (a hit references an inactive mon, or the leads changed under existing events).</p>
+        <div className="controls">
+          <button onClick={() => setWs({ ...ws, events: ws.events.slice(0, -1) })}>Undo last event</button>
+          <button onClick={() => setWs({ ...ws, events: [] })}>Clear all events</button>
+        </div>
+      </div>
+    );
+  }
 
   const monMoves = (monId: string): string[] => [...ws.sideA.mons, ...ws.sideB.mons].find((m) => m.monId === monId)?.parsed.moves ?? [];
   const actives = activeMonIds(board);
@@ -235,16 +245,22 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
               </div>
             )}
 
-            {mode === 'switch' && (
-              <div>
-                <div className="muted" style={{ fontSize: 12 }}>Bring in:</div>
-                <div className="chips">
-                  {benchMons(ws, slotPosition(slotOfMon(board, actor)!).side, board).map((m) => (
-                    <button key={m.monId} onClick={() => doSwitch(m.monId)}>{m.parsed.species}</button>
-                  ))}
+            {mode === 'switch' && (() => {
+              const actorSlot = slotOfMon(board, actor);
+              if (!actorSlot) return <div className="muted">This Pokémon isn’t active, so it can’t switch.</div>;
+              const bench = benchMons(ws, slotPosition(actorSlot).side, board);
+              return (
+                <div>
+                  <div className="muted" style={{ fontSize: 12 }}>Bring in:</div>
+                  <div className="chips">
+                    {bench.length === 0 && <span className="muted">no bench mon available</span>}
+                    {bench.map((m) => (
+                      <button key={m.monId} onClick={() => doSwitch(m.monId)}>{m.parsed.species}</button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {mode === 'mega' && (
               <div>

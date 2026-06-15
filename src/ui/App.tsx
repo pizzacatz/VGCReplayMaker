@@ -4,6 +4,7 @@ import { TeamsTab } from './TeamsTab';
 import { TranscribeTab } from './TranscribeTab';
 import { SolveTab } from './SolveTab';
 import { ReplayTab } from './ReplayTab';
+import { ErrorBoundary } from './ErrorBoundary';
 
 const STORAGE_KEY = 'vgc-workspace-v1';
 
@@ -56,10 +57,12 @@ export function App() {
         </button>
       </div>
 
-      {tab === 'teams' && <TeamsTab ws={ws} setWs={setWs} />}
-      {tab === 'transcribe' && <TranscribeTab ws={ws} setWs={setWs} />}
-      {tab === 'solve' && <SolveTab ws={ws} />}
-      {tab === 'replay' && <ReplayTab ws={ws} />}
+      <ErrorBoundary key={tab} onReset={() => setWs(emptyWorkspace())}>
+        {tab === 'teams' && <TeamsTab ws={ws} setWs={setWs} />}
+        {tab === 'transcribe' && <TranscribeTab ws={ws} setWs={setWs} />}
+        {tab === 'solve' && <SolveTab ws={ws} />}
+        {tab === 'replay' && <ReplayTab ws={ws} />}
+      </ErrorBoundary>
     </div>
   );
 }
