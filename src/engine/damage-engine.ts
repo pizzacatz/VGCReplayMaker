@@ -56,6 +56,12 @@ export interface HitContext {
   /** Paradox boost (Protosynthesis/Quark Drive) active stat — ×1.3 (×1.5 Speed) on that mon */
   attackerBoostedStat?: string | undefined;
   defenderBoostedStat?: string | undefined;
+  /** attacker's move was boosted by an ally's Helping Hand (×1.5) */
+  helpingHand?: boolean | undefined;
+  /** a spread move that hit only ONE target → drop the Doubles 0.75 spread reduction */
+  singleTargetSpread?: boolean | undefined;
+  /** false → defender was below full HP (suppresses Multiscale / Shadow Shield) */
+  defenderFullHp?: boolean | undefined;
 }
 
 export interface HitInput {
@@ -145,7 +151,7 @@ function buildMon(
   spec: MonSpec,
   statKey: Exclude<StatKey, 'hp'>,
   sp: number,
-  extra?: { boosts?: Record<string, number> | undefined; status?: string | undefined; boostedStat?: string | undefined },
+  extra?: { boosts?: Record<string, number> | undefined; status?: string | undefined; boostedStat?: string | undefined; curHP?: number | undefined },
 ): Pokemon {
   const base = baseStat(gen, spec.species, statKey);
   const role = roleOf(spec.alignment, statKey);
@@ -159,6 +165,7 @@ function buildMon(
     ...(extra?.boosts ? { boosts: extra.boosts } : {}),
     ...(extra?.status ? { status: extra.status as never } : {}),
     ...(extra?.boostedStat ? { boostedStat: extra.boostedStat as never } : {}),
+    ...(extra?.curHP !== undefined ? { curHP: extra.curHP } : {}),
   });
   const expected = spToFinal(base, sp, role);
   const got = mon.stats[statKey];
@@ -191,7 +198,11 @@ export function predictHit(
   input: HitInput,
   registry: ExceptionRegistry = championsExceptions,
 ): PredictResult {
-  const move = new Move(gen, input.move, input.crit ? { isCrit: true } : undefined);
+  const hctx = input.context;
+  const move = new Move(gen, input.move, {
+    ...(input.crit ? { isCrit: true } : {}),
+    ...(hctx?.singleTargetSpread ? { overrides: { target: 'normal' } } : {}), // spread move that hit one mon → no 0.75
+  });
   if (move.category === 'Status') {
     throw new Error(`move ${input.move} is Status — no damage to predict`);
   }
@@ -199,7 +210,6 @@ export function predictHit(
   const offensiveStat = OFFENSIVE[category];
   const defensiveStat = DEFENSIVE[category];
 
-  const hctx = input.context;
   const attacker = buildMon(gen, input.attacker, offensiveStat, input.attackerSp, {
     ...(hctx?.attackerBoosts ? { boosts: hctx.attackerBoosts } : {}),
     ...(hctx?.attackerBurned ? { status: 'brn' } : {}),
@@ -208,6 +218,7 @@ export function predictHit(
   const defender = buildMon(gen, input.defender, defensiveStat, input.defenderSp, {
     ...(hctx?.defenderBoosts ? { boosts: hctx.defenderBoosts } : {}),
     ...(hctx?.defenderBoostedStat ? { boostedStat: hctx.defenderBoostedStat } : {}),
+    ...(hctx?.defenderFullHp === false ? { curHP: 1 } : {}), // below full → Multiscale / Shadow Shield off
   });
 
   // Champions is always Doubles; the field is applied only for real (reconstructed)
@@ -218,6 +229,7 @@ export function predictHit(
         ...(hctx.weather ? { weather: hctx.weather as never } : {}),
         ...(hctx.terrain ? { terrain: hctx.terrain as never } : {}),
         defenderSide: new Side({ isReflect: !!hctx.reflect, isLightScreen: !!hctx.lightScreen, isAuroraVeil: !!hctx.auroraVeil }),
+        ...(hctx.helpingHand ? { attackerSide: new Side({ isHelpingHand: true }) } : {}),
       })
     : undefined;
 
@@ -278,6 +290,7 @@ export function predictMultiHit(
   const defender = buildMon(gen, input.defender, defensiveStat, input.defenderSp, {
     ...(hctx?.defenderBoosts ? { boosts: hctx.defenderBoosts } : {}),
     ...(hctx?.defenderBoostedStat ? { boostedStat: hctx.defenderBoostedStat } : {}),
+    ...(hctx?.defenderFullHp === false ? { curHP: 1 } : {}),
   });
   const field = hctx
     ? new Field({
@@ -285,6 +298,7 @@ export function predictMultiHit(
         ...(hctx.weather ? { weather: hctx.weather as never } : {}),
         ...(hctx.terrain ? { terrain: hctx.terrain as never } : {}),
         defenderSide: new Side({ isReflect: !!hctx.reflect, isLightScreen: !!hctx.lightScreen, isAuroraVeil: !!hctx.auroraVeil }),
+        ...(hctx.helpingHand ? { attackerSide: new Side({ isHelpingHand: true }) } : {}),
       })
     : undefined;
 

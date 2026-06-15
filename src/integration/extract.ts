@@ -50,16 +50,28 @@ function paradoxBoostAt(log: MatchLog, monId: string, seq: number): string | und
   return stat;
 }
 
-/** The reconstructed field/boosts/burn at the moment of a hit (always Doubles). */
-function contextAt(log: MatchLog, attacker: string, defender: string, seq: number): HitContext {
+/** The reconstructed field/boosts/burn/Helping-Hand/HP at the moment of a hit (always Doubles). */
+function contextAt(log: MatchLog, ev: Extract<MatchEvent, { type: 'damage' }>): HitContext {
+  const { attacker, defender, seq, turn } = ev;
   const dSide = sideOfMon(log, defender);
-  const aBoosted = paradoxBoostAt(log, attacker, seq);
-  const dBoosted = paradoxBoostAt(log, defender, seq);
+  const aSide = sideOfMon(log, attacker);
   const weather = WEATHERS.find((w) => isActiveAt(log, w, undefined, seq));
   let terrain: string | undefined;
   for (const [field, calc] of Object.entries(TERRAINS)) if (isActiveAt(log, field, undefined, seq)) terrain = calc;
   const aBoosts = boostsAt(log, attacker, seq);
   const dBoosts = boostsAt(log, defender, seq);
+  const aBoosted = paradoxBoostAt(log, attacker, seq);
+  const dBoosted = paradoxBoostAt(log, defender, seq);
+  // Helping Hand: an ally boosted THIS attacker earlier in the turn.
+  const helpingHand = log.events.some(
+    (e) => e.type === 'move_used' && e.move === 'Helping Hand' && e.turn === turn && e.seq < seq && sideOfMon(log, e.user) === aSide && e.targets.includes(attacker),
+  );
+  // A spread move that hit only one target → drop the Doubles 0.75.
+  const mv = log.events.find((e) => e.type === 'move_used' && e.user === attacker && e.move === ev.move && e.turn === turn);
+  const singleTargetSpread = mv?.type === 'move_used' && !!mv.isSpread && mv.targets.length <= 1;
+  // Multiscale / Shadow Shield only at full HP.
+  const defMax = [...log.sideA.mons, ...log.sideB.mons].find((m) => m.monId === defender)?.maxHp ?? 0;
+  const defenderFullHp = defMax > 0 ? ev.hpBefore >= defMax : true;
   return {
     ...(weather ? { weather } : {}),
     ...(terrain ? { terrain } : {}),
@@ -71,6 +83,9 @@ function contextAt(log: MatchLog, attacker: string, defender: string, seq: numbe
     ...(isStatusAt(log, attacker, 'brn', seq) ? { attackerBurned: true } : {}),
     ...(aBoosted ? { attackerBoostedStat: aBoosted } : {}),
     ...(dBoosted ? { defenderBoostedStat: dBoosted } : {}),
+    ...(helpingHand ? { helpingHand: true } : {}),
+    ...(singleTargetSpread ? { singleTargetSpread: true } : {}),
+    ...(defenderFullHp ? {} : { defenderFullHp: false }),
   };
 }
 
@@ -102,7 +117,7 @@ export function extractCleanHits(log: MatchLog): SolverHit[] {
       ...(dForme ? { defenderSpecies: dForme } : {}),
       source: `T${ev.turn}`, // game/round context prepended by the caller (drill-down)
       eventId: ev.eventId, // lets the UI exclude this exact hit
-      context: contextAt(log, ev.attacker, ev.defender, ev.seq), // field/boosts/burn (Doubles)
+      context: contextAt(log, ev), // field/boosts/burn/Helping-Hand/spread/HP (Doubles)
       ...(ev.hits && ev.hits > 1 ? { hits: ev.hits } : {}), // multi-hit → convolution factor
     });
   }

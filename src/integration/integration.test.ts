@@ -263,3 +263,41 @@ describe('Paradox boost (Protosynthesis/Quark Drive) in the damage factor', () =
     expect(sys(false).propagate().domains.get('ih')!.get('atk')!).not.toContain(8); // ignoring it demands more
   });
 });
+
+describe('Damage context: Helping Hand, single-target spread, Multiscale', () => {
+  const ttar: MonSpec = { species: 'Tyranitar', alignment: 'neutral' };
+  const dnite: MonSpec = { species: 'Dragonite', alignment: 'neutral', ability: 'Multiscale' };
+
+  it('predictHit applies each modifier (vs the unmodified Doubles baseline)', () => {
+    const base = predictHit(gen, { attacker: ttar, attackerSp: 0, defender: garSpec, defenderSp: 0, move: 'Rock Slide', context: {} }).rolls[7]!;
+    const hh = predictHit(gen, { attacker: ttar, attackerSp: 0, defender: garSpec, defenderSp: 0, move: 'Rock Slide', context: { helpingHand: true } }).rolls[7]!;
+    const single = predictHit(gen, { attacker: ttar, attackerSp: 0, defender: garSpec, defenderSp: 0, move: 'Rock Slide', context: { singleTargetSpread: true } }).rolls[7]!;
+    expect(hh).toBeGreaterThan(base); // Helping Hand ×1.5
+    expect(single).toBeGreaterThan(base); // dropping the 0.75 spread reduction
+    const msFull = predictHit(gen, { attacker: garSpec, attackerSp: 0, defender: dnite, defenderSp: 0, move: 'Ice Beam', context: {} }).rolls[7]!;
+    const msHurt = predictHit(gen, { attacker: garSpec, attackerSp: 0, defender: dnite, defenderSp: 0, move: 'Ice Beam', context: { defenderFullHp: false } }).rolls[7]!;
+    expect(msHurt).toBeGreaterThan(msFull); // Multiscale off below full HP
+  });
+
+  it('extraction reconstructs the modifiers from the log', () => {
+    const log: MatchLog = {
+      matchId: 'ctx2', format: 'Champions Reg M-A',
+      sideA: { player: 'W', mons: [{ monId: 'inc', species: 'Incineroar', maxHp: 170 }, { monId: 'zap', species: 'Zapdos', maxHp: 160 }] },
+      sideB: { player: 'O', mons: [{ monId: 'gar', species: 'Garchomp', maxHp: 183 }, { monId: 'ape', species: 'Annihilape', maxHp: 175 }] },
+      leads: [{ side: 'A', position: 0, monId: 'inc' }, { side: 'A', position: 1, monId: 'zap' }, { side: 'B', position: 0, monId: 'gar' }, { side: 'B', position: 1, monId: 'ape' }],
+      events: [
+        { eventId: 'hh', seq: 1, turn: 1, type: 'move_used', user: 'zap', move: 'Helping Hand', targets: ['inc'] },
+        { eventId: 'm1', seq: 2, turn: 1, type: 'move_used', user: 'inc', move: 'Flare Blitz', targets: ['gar'] },
+        { eventId: 'd1', seq: 3, turn: 1, type: 'damage', attacker: 'inc', move: 'Flare Blitz', defender: 'gar', hpBefore: 183, hpAfter: 120, crit: false, status: 'clean' },
+        // a spread Rock Slide that hit only ONE foe (the other already gone)
+        { eventId: 'm2', seq: 4, turn: 1, type: 'move_used', user: 'gar', move: 'Rock Slide', targets: ['inc'], isSpread: true },
+        { eventId: 'd2', seq: 5, turn: 1, type: 'damage', attacker: 'gar', move: 'Rock Slide', defender: 'inc', hpBefore: 100, hpAfter: 60, crit: false, status: 'clean' },
+      ],
+    };
+    const [h1, h2] = extractCleanHits(log);
+    expect(h1!.context?.helpingHand).toBe(true);
+    expect(h1!.context?.defenderFullHp).toBeUndefined(); // gar was at full HP
+    expect(h2!.context?.singleTargetSpread).toBe(true); // spread move, one target
+    expect(h2!.context?.defenderFullHp).toBe(false); // inc was at 100/170
+  });
+});
