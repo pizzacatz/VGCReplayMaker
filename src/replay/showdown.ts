@@ -61,6 +61,7 @@ export function toShowdownLog(log: MatchLog): string {
   }
 
   for (const ev of [...log.events].sort((a, b) => a.seq - b.seq)) emit(ev);
+  if (log.result) lines.push(`|win|${playerName(log.result.winnerSide)}`);
   return lines.join('\n');
 
   function emit(ev: MatchEvent): void {

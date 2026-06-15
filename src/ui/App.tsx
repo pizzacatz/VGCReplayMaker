@@ -66,6 +66,12 @@ export function App() {
       <p className="muted">
         {ws.round ? <strong style={{ color: 'var(--text)' }}>{ws.round} · </strong> : null}
         {ws.sideA.player} vs {ws.sideB.player} · Regulation M-A · open sheets.
+        {ws.result ? (
+          <strong style={{ color: 'var(--good)' }}>
+            {' · '}
+            {(ws.result.winner === 'A' ? ws.sideA.player : ws.sideB.player)} won by {ws.result.reason}
+          </strong>
+        ) : null}
       </p>
       <div className="tabs">
         {tabs.map(([id, label]) => (

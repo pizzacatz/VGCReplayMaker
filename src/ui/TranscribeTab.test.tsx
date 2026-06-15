@@ -132,6 +132,22 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText(/→99/)).toBeTruthy(); // event log reflects the edit
   });
 
+  it('the Faint button marks a Pokémon fainted', () => {
+    const { getAllByText, getByText } = render(<Harness />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Faint ✕'));
+    expect(getAllByText(/fainted/).length).toBeGreaterThan(0);
+  });
+
+  it('damage to 0 HP auto-faints (no KO checkbox needed)', () => {
+    const { getAllByText, getByText, getByPlaceholderText } = render(<Harness />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Flare Blitz'));
+    fireEvent.change(getByPlaceholderText('hp after'), { target: { value: '0' } });
+    fireEvent.click(getByText('Log action'));
+    expect(getAllByText(/fainted/).length).toBeGreaterThan(0);
+  });
+
   it('picking a damaging move pre-fills an estimated HP-after', () => {
     const { getAllByText, getByText, getByPlaceholderText } = render(<Harness />);
     fireEvent.click(getAllByText('Incineroar').at(-1)!);

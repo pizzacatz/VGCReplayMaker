@@ -185,6 +185,20 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
     expect(targets).toContain('A0'); // Incineroar (Fire/Dark) chipped
     expect(targets).not.toContain('B0'); // Garchomp (Ground) immune
   });
+
+  it('endOfTurnEvents auto-faints a mon a residual reduces to 0', () => {
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [
+        { eventId: 'p', seq: 1, turn: 1, type: 'passive_hp_change', target: 'A0', source: 'test', hpBefore: 175, hpAfter: 5 },
+        { eventId: 'w', seq: 2, turn: 1, type: 'field_change', field: 'Sand', action: 'set' },
+      ],
+    };
+    const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const eot = endOfTurnEvents(ws, b).map((bld, i) => bld(i + 1, 1));
+    expect(eot.some((e) => e.type === 'faint' && e.target === 'A0')).toBe(true); // sand chip KO'd it
+  });
 });
 
 describe('broughtInfo — process of elimination for the bring', () => {

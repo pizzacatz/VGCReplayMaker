@@ -54,6 +54,11 @@ describe('toShowdownLog', () => {
     has('|faint|p2a: Garchomp');
   });
 
+  it('appends |win| when a result (e.g. forfeit) is recorded', () => {
+    const won = toShowdownLog({ ...LOG, result: { winnerSide: 'B', reason: 'forfeit' } });
+    expect(won.includes('|win|AgentUpig')).toBe(true);
+  });
+
   it('renders a faint HP as "0 fnt"', () => {
     const koLog = toShowdownLog({ ...LOG, events: [{ eventId: 'd', seq: 1, turn: 1, type: 'damage', attacker: 'inc', move: 'Flare Blitz', defender: 'gar', hpBefore: 183, hpAfter: 0, crit: false, status: 'clean' }] });
     expect(koLog.includes('|-damage|p2a: Garchomp|0 fnt')).toBe(true);

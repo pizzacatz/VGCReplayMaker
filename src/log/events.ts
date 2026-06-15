@@ -160,6 +160,8 @@ export interface LeadEntry {
   monId: string;
 }
 
+export type MatchResultReason = 'ko' | 'forfeit' | 'timeout' | 'dq';
+
 export interface MatchLog {
   matchId: string;
   format: string;
@@ -169,4 +171,6 @@ export interface MatchLog {
   leads: LeadEntry[];
   /** seq-ordered (sorted on read regardless) */
   events: MatchEvent[];
+  /** match outcome, if recorded */
+  result?: { winnerSide: Side; reason: MatchResultReason };
 }

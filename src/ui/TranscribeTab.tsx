@@ -200,7 +200,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         totalDamage += dmg;
         const eff = effOf(t)?.label ?? '1x'; // derived from the type chart, not entered
         builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit: o.crit, status: o.status, observedEffectiveness: eff }));
-        if (o.ko) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target: t }));
+        if (after === 0) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target: t })); // auto-faint at 0 HP
         if (canFlinch && o.flinch) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'flinch', outcome: 'yes' }));
         // Sitrus Berry: heals the defender at ≤50% HP (alive)
         const dMax = monMaxHp(ws, t);
@@ -234,6 +234,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         aHp = Math.max(0, Math.min(cap, aHp + r.delta));
         const target = actor;
         builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: r.kind, target, source: r.source, hpBefore, hpAfter: aHp }));
+        if (aHp === 0 && hpBefore > 0) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target })); // recoil/contact KO
       }
     }
     emit(builders);
@@ -249,6 +250,12 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     ];
     builders.push(...entryEffectEvents(ws, incoming, monAbility(ws, incoming), board, true)); // Intimidate / weather on entry
     emit(builders);
+    reset();
+  };
+
+  const doFaint = () => {
+    if (!actor) return;
+    emit([(seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target: actor })]);
     reset();
   };
 
@@ -280,6 +287,34 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
           <span className="muted">Damage, recoil, Intimidate, weather, items auto-fill — adjust HP to the screen.</span>
         </div>
 
+        <div className="controls" style={{ marginTop: 0 }}>
+          <span className="muted" style={{ fontSize: 12 }}>🏁 Result:</span>
+          <select
+            value={ws.result?.winner ?? ''}
+            onChange={(e) => {
+              const w = e.target.value as '' | 'A' | 'B';
+              if (!w) {
+                const { result: _drop, ...rest } = ws;
+                setWs(rest);
+              } else {
+                setWs({ ...ws, result: { winner: w, reason: ws.result?.reason ?? 'ko' } });
+              }
+            }}
+          >
+            <option value="">— in progress —</option>
+            <option value="A">{ws.sideA.player} wins</option>
+            <option value="B">{ws.sideB.player} wins</option>
+          </select>
+          {ws.result && (
+            <select value={ws.result.reason} onChange={(e) => setWs({ ...ws, result: { ...ws.result!, reason: e.target.value as 'ko' | 'forfeit' | 'timeout' | 'dq' } })}>
+              <option value="ko">by KO</option>
+              <option value="forfeit">by forfeit</option>
+              <option value="timeout">by timeout</option>
+              <option value="dq">by DQ</option>
+            </select>
+          )}
+        </div>
+
         <Board actives={actives} actor={actor} onPick={pickActor} youName={ws.sideA.player} oppName={ws.sideB.player} />
 
         {actor && (
@@ -301,6 +336,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                   {megaForme && !alreadyMega && (
                     <button onClick={doMega} title={`held stone → ${megaForme}`}>Mega Evolve ✦</button>
                   )}
+                  <button onClick={doFaint} title="mark this Pokémon as fainted" style={{ color: 'var(--bad)' }}>Faint ✕</button>
                 </div>
               </>
             )}

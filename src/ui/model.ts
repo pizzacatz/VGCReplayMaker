@@ -28,12 +28,16 @@ export interface SideState {
   leads?: string[];
 }
 
+export type MatchResultReason = 'ko' | 'forfeit' | 'timeout' | 'dq';
+
 export interface Workspace {
   /** tournament/round label, e.g. "Top 4B", "Round 8" */
   round?: string;
   sideA: SideState;
   sideB: SideState;
   events: MatchEvent[];
+  /** recorded outcome (winner side + reason, e.g. forfeit) */
+  result?: { winner: SideId; reason: MatchResultReason };
 }
 
 export function emptyWorkspace(): Workspace {
@@ -120,6 +124,7 @@ export function buildLog(ws: Workspace): MatchLog {
     sideB: { player: ws.sideB.player, mons: ws.sideB.mons.map(sheet) },
     leads,
     events: [...ws.events].sort((a, b) => a.seq - b.seq),
+    ...(ws.result ? { result: { winnerSide: ws.result.winner, reason: ws.result.reason } } : {}),
   };
 }
 
@@ -497,11 +502,12 @@ export function endOfTurnEvents(ws: Workspace, board: ReplayState): EventBuilder
     const max = monMaxHp(ws, m.monId) || m.maxHp;
     const types = speciesTypes(m.species);
     const item = monItem(ws, m.monId);
+    const monId = m.monId;
     const push = (source: string, delta: number, kind: 'passive_hp_change' | 'heal') => {
       const before = hp;
       hp = Math.max(0, Math.min(max, hp + delta));
-      const monId = m.monId;
       out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: kind, target: monId, source, hpBefore: before, hpAfter: hp }) as MatchEvent);
+      if (hp === 0 && before > 0) out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target: monId }));
     };
     if (board.weather === 'Sand' && !types.some((t) => ['Rock', 'Ground', 'Steel'].includes(t))) push('Sandstorm', -Math.floor(max / 16), 'passive_hp_change');
     if (item === 'Leftovers') push('Leftovers', Math.floor(max / 16), 'heal');
