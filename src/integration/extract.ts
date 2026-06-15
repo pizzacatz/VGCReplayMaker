@@ -12,6 +12,15 @@ import type { Gen, HitContext, MonSpec } from '../engine';
 import type { SolverHit } from '../solver';
 import type { MatchEvent, MatchLog, Side } from '../log';
 
+/**
+ * Moves whose power depends on the Speed stats (Gyro Ball = 25×target/user, Electro
+ * Ball = a user/target ratio). Their damage couples to BOTH mons' (unknown) Speed,
+ * so it can't be pinned with the offense×defense factor — the calc would silently
+ * use default speeds and infer a wrong stat. Excluded from the clean factor set
+ * (Constraint §11) until a Speed-coupled factor exists; the hit still replays.
+ */
+const SPEED_DEPENDENT_MOVES = new Set(['gyroball', 'electroball']);
+
 const WEATHERS = ['Sun', 'Rain', 'Sand', 'Snow', 'Hail'];
 const TERRAINS: Record<string, string> = { 'Grassy Terrain': 'Grassy', 'Electric Terrain': 'Electric', 'Psychic Terrain': 'Psychic', 'Misty Terrain': 'Misty' };
 
@@ -65,6 +74,7 @@ export function extractCleanHits(log: MatchLog): SolverHit[] {
   const hits: SolverHit[] = [];
   for (const ev of [...log.events].sort((a, b) => a.seq - b.seq)) {
     if (ev.type !== 'damage' || ev.status !== 'clean') continue;
+    if (SPEED_DEPENDENT_MOVES.has(toID(ev.move))) continue; // power couples to unknown Speed — can't pin (§11)
     const aForme = megaFormeAt(log, ev.attacker, ev.seq); // post-Mega hits use the Mega's stats
     const dForme = megaFormeAt(log, ev.defender, ev.seq);
     hits.push({

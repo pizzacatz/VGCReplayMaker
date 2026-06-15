@@ -203,3 +203,22 @@ describe('Field/boosts reconstruction (extraction)', () => {
     expect(hit.context?.attackerBoosts).toEqual({ atk: 2 });
   });
 });
+
+describe('Speed-dependent moves are excluded from the clean factor set', () => {
+  it('drops a Gyro Ball hit (its power couples to unknown Speed) rather than mis-model it', () => {
+    const log: MatchLog = {
+      matchId: 'gb', format: 'Champions Reg M-A',
+      sideA: { player: 'W', mons: [{ monId: 'fer', species: 'Ferrothorn', maxHp: 175 }] },
+      sideB: { player: 'O', mons: [{ monId: 'dnite', species: 'Dragonite', maxHp: 180 }] },
+      leads: [{ side: 'A', position: 0, monId: 'fer' }, { side: 'B', position: 0, monId: 'dnite' }],
+      events: [
+        { eventId: 'm', seq: 1, turn: 1, type: 'move_used', user: 'fer', move: 'Gyro Ball', targets: ['dnite'] },
+        { eventId: 'd', seq: 2, turn: 1, type: 'damage', attacker: 'fer', move: 'Gyro Ball', defender: 'dnite', hpBefore: 180, hpAfter: 120, crit: false, status: 'clean' },
+        { eventId: 'm2', seq: 3, turn: 1, type: 'move_used', user: 'dnite', move: 'Earthquake', targets: ['fer'] },
+        { eventId: 'd2', seq: 4, turn: 1, type: 'damage', attacker: 'dnite', move: 'Earthquake', defender: 'fer', hpBefore: 175, hpAfter: 150, crit: false, status: 'clean' },
+      ],
+    };
+    const hits = extractCleanHits(log);
+    expect(hits.map((h) => h.move)).toEqual(['Earthquake']); // Gyro Ball excluded, the normal hit kept
+  });
+});
