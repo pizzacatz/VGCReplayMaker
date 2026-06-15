@@ -26,6 +26,8 @@ export interface SideState {
   mons: MonEntry[];
   /** the two starting Pokémon (positions 0/1). Defaults to the first two; user-selectable. */
   leads?: string[];
+  /** stable mon-id prefix for this side's team (team-lock identity); defaults to the side letter. */
+  idPrefix?: string;
 }
 
 export type MatchResultReason = 'ko' | 'forfeit' | 'timeout' | 'dq';
@@ -79,12 +81,12 @@ export function monLabel(ws: Workspace, monId: string): string {
   return m ? `${m.parsed.species}${m.parsed.nickname ? ` (${m.parsed.nickname})` : ''}` : monId;
 }
 
-/** Parse one side's pokepaste into MonEntries (monIds assigned A0/A1/… per side). */
-export function parseSide(side: SideId, paste: string): { mons: MonEntry[]; error?: string } {
+/** Parse one team's pokepaste into MonEntries (monIds assigned `${prefix}0/1/…`). */
+export function parseSide(prefix: string, paste: string): { mons: MonEntry[]; error?: string } {
   try {
     const result = parsePokepaste(paste);
     return {
-      mons: result.mons.map((parsed, i) => ({ monId: `${side}${i}`, parsed, observedMaxHp: defaultMaxHp(parsed) })),
+      mons: result.mons.map((parsed, i) => ({ monId: `${prefix}${i}`, parsed, observedMaxHp: defaultMaxHp(parsed) })),
     };
   } catch (e) {
     return { mons: [], error: (e as Error).message };
@@ -497,6 +499,8 @@ export function estimateDamage(ws: Workspace, board: ReplayState, attackerId: st
  */
 export function endOfTurnEvents(ws: Workspace, board: ReplayState): EventBuilder[] {
   const out: EventBuilder[] = [];
+  const curTurn = ws.events.reduce((mx, e) => Math.max(mx, e.turn), 0);
+  const activeIds = new Set(activeMonIds(board).filter((a) => !a.fainted).map((a) => a.monId));
   for (const m of activeMonIds(board).filter((a) => !a.fainted)) {
     let hp = m.hp;
     const max = monMaxHp(ws, m.monId) || m.maxHp;
@@ -516,8 +520,47 @@ export function endOfTurnEvents(ws: Workspace, board: ReplayState): EventBuilder
     if (status === 'brn') push('Burn', -Math.floor(max / 16), 'passive_hp_change');
     else if (status === 'psn') push('Poison', -Math.floor(max / 8), 'passive_hp_change');
     else if (status === 'tox') push('Poison', -Math.floor(max / 8), 'passive_hp_change');
+    // Partial-trapping residual (Infestation, Bind, Fire Spin, Sand Tomb, Magma Storm, …)
+    const trap = partialTrap(ws, monId, curTurn, activeIds);
+    if (trap) push(trap.source, -Math.floor(max / trap.div), 'passive_hp_change');
   }
   return out;
+}
+
+/** Whether a move applies the partial-trap volatile (data-driven, no hardcoded list). */
+function isBindingMove(move: string): boolean {
+  try {
+    return (Dex.moves.get(move) as { volatileStatus?: string }).volatileStatus === 'partiallytrapped';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * If `monId` is currently caught in a partial trap, the chip source + divisor
+ * (1/8 max HP, or 1/6 if the trapper holds a Binding Band). The trap is derived
+ * from the log: the latest binding move targeting the mon, still within its ~5
+ * end-of-turn window, with the mon not having switched out or fainted and the
+ * trapper still on the field. Returns null otherwise.
+ */
+function partialTrap(
+  ws: Workspace,
+  monId: string,
+  curTurn: number,
+  activeIds: Set<string>,
+): { source: string; div: number } | null {
+  const binds = ws.events
+    .filter((e): e is Extract<MatchEvent, { type: 'move_used' }> => e.type === 'move_used' && e.targets.includes(monId) && isBindingMove(e.move))
+    .sort((a, b) => a.seq - b.seq);
+  const last = binds.at(-1);
+  if (!last) return null;
+  if (curTurn - last.turn > 4) return null; // partial trap lasts 4–5 turns
+  if (!activeIds.has(last.user)) return null; // trap ends if the binder leaves the field
+  const ended = ws.events.some(
+    (e) => e.seq > last.seq && ((e.type === 'switch' && e.out === monId) || (e.type === 'faint' && e.target === monId)),
+  );
+  if (ended) return null;
+  return { source: last.move, div: monItem(ws, last.user) === 'Binding Band' ? 6 : 8 };
 }
 
 /** Recoil/drain fractions of damage dealt for a move (from dex move data). */

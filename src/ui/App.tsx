@@ -1,40 +1,61 @@
 import { useEffect, useRef, useState } from 'react';
-import { emptyWorkspace, type Workspace } from './model';
+import { type Workspace } from './model';
+import {
+  activeGame,
+  activeMatch,
+  activeTournament,
+  applyWorkspace,
+  deriveWorkspace,
+  emptyStore,
+  loadStore,
+  matchStanding,
+  standingLabel,
+  teamById,
+  type ScoutingStore,
+} from './store';
+import { TournamentNav } from './TournamentNav';
 import { TeamsTab } from './TeamsTab';
 import { TranscribeTab } from './TranscribeTab';
 import { SolveTab } from './SolveTab';
 import { ReplayTab } from './ReplayTab';
 import { ErrorBoundary } from './ErrorBoundary';
 
-const STORAGE_KEY = 'vgc-workspace-v1';
+const STORE_KEY = 'vgc-store-v1';
+const LEGACY_KEY = 'vgc-workspace-v1';
 
-function load(): Workspace {
+function load(): ScoutingStore {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...emptyWorkspace(), ...(JSON.parse(raw) as Workspace) };
+    return loadStore(localStorage.getItem(STORE_KEY), localStorage.getItem(LEGACY_KEY));
   } catch {
-    /* ignore */
+    return emptyStore();
   }
-  return emptyWorkspace();
 }
 
 type Tab = 'teams' | 'transcribe' | 'solve' | 'replay';
 
 export function App() {
-  const [ws, setWs] = useState<Workspace>(load);
+  const [store, setStore] = useState<ScoutingStore>(load);
   const [tab, setTab] = useState<Tab>('teams');
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(ws));
-  }, [ws]);
+    localStorage.setItem(STORE_KEY, JSON.stringify(store));
+  }, [store]);
+
+  const ws: Workspace = deriveWorkspace(store);
+  const setWs = (w: Workspace) => setStore(applyWorkspace(store, w));
+
+  const t = activeTournament(store);
+  const match = activeMatch(store);
+  const game = activeGame(store);
+  const standing = match ? matchStanding(match) : undefined;
 
   const saveFile = () => {
-    const blob = new Blob([JSON.stringify(ws, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(store, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${ws.round || 'transcription'}-${ws.sideA.player}-vs-${ws.sideB.player}.json`.replace(/\s+/g, '_');
+    a.download = `${t?.name || 'tournament'}.json`.replace(/\s+/g, '_');
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -43,9 +64,8 @@ export function App() {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const parsed = JSON.parse(String(reader.result)) as Workspace;
-        if (!parsed.sideA || !parsed.sideB || !Array.isArray(parsed.events)) throw new Error('not a transcription file');
-        setWs({ ...emptyWorkspace(), ...parsed });
+        const raw = String(reader.result);
+        setStore(loadStore(raw, raw)); // accepts a tournament store OR a legacy single-game workspace
       } catch (e) {
         alert(`Could not load: ${(e as Error).message}`);
       }
@@ -60,19 +80,23 @@ export function App() {
     ['replay', 'Replay'],
   ];
 
+  const winnerName = standing?.winnerSide === 'A' ? teamById(t, match!.teamAId)?.player : teamById(t, match!.teamBId)?.player;
+
   return (
     <div className="app notranslate" translate="no">
       <h1>Champions Match Analysis</h1>
       <p className="muted">
-        {ws.round ? <strong style={{ color: 'var(--text)' }}>{ws.round} · </strong> : null}
-        {ws.sideA.player} vs {ws.sideB.player} · Regulation M-A · open sheets.
-        {ws.result ? (
-          <strong style={{ color: 'var(--good)' }}>
-            {' · '}
-            {(ws.result.winner === 'A' ? ws.sideA.player : ws.sideB.player)} won by {ws.result.reason}
-          </strong>
+        {t ? <strong style={{ color: 'var(--text)' }}>{t.name} · </strong> : null}
+        {match ? `${match.round} · ` : null}
+        {match ? standingLabel(store, match) : null}
+        {game ? <span> · Game {game.gameNumber}</span> : null}
+        {standing?.decided ? (
+          <strong style={{ color: 'var(--good)' }}> · {winnerName} won the set</strong>
         ) : null}
       </p>
+
+      <TournamentNav store={store} setStore={setStore} />
+
       <div className="tabs">
         {tabs.map(([id, label]) => (
           <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
@@ -80,8 +104,8 @@ export function App() {
           </button>
         ))}
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-          <button onClick={saveFile} title="Download this transcription as a file">⬇ Save</button>
-          <button onClick={() => fileRef.current?.click()} title="Load a saved transcription to edit">⬆ Load</button>
+          <button onClick={saveFile} title="Download this whole tournament as a file">⬇ Save</button>
+          <button onClick={() => fileRef.current?.click()} title="Load a saved tournament (or legacy transcription) to edit">⬆ Load</button>
           <input
             ref={fileRef}
             type="file"
@@ -96,7 +120,7 @@ export function App() {
           <button
             style={{ color: 'var(--muted)' }}
             onClick={() => {
-              if (confirm('Clear the entire workspace (teams + events)?')) setWs(emptyWorkspace());
+              if (confirm('Clear everything (all tournaments, matches, games)?')) setStore(emptyStore());
             }}
           >
             Reset
@@ -104,10 +128,10 @@ export function App() {
         </span>
       </div>
 
-      <ErrorBoundary key={tab} onReset={() => setWs(emptyWorkspace())}>
+      <ErrorBoundary key={`${tab}-${store.activeGameId}`} onReset={() => setStore(emptyStore())}>
         {tab === 'teams' && <TeamsTab ws={ws} setWs={setWs} />}
         {tab === 'transcribe' && <TranscribeTab ws={ws} setWs={setWs} />}
-        {tab === 'solve' && <SolveTab ws={ws} />}
+        {tab === 'solve' && <SolveTab ws={ws} store={store} />}
         {tab === 'replay' && <ReplayTab ws={ws} />}
       </ErrorBoundary>
     </div>

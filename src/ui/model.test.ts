@@ -199,6 +199,39 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
     const eot = endOfTurnEvents(ws, b).map((bld, i) => bld(i + 1, 1));
     expect(eot.some((e) => e.type === 'faint' && e.target === 'A0')).toBe(true); // sand chip KO'd it
   });
+
+  it('endOfTurnEvents: Infestation chips the trapped foe 1/8 (data-driven partial trap)', () => {
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [{ eventId: 'inf', seq: 1, turn: 1, type: 'move_used', user: 'A0', move: 'Infestation', targets: ['B0'] }],
+    };
+    const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const chip = endOfTurnEvents(ws, b)
+      .map((bld, i) => bld(i + 1, 1))
+      .filter((e) => e.type === 'passive_hp_change' && e.source === 'Infestation');
+    expect(chip).toHaveLength(1);
+    const e = chip[0]!;
+    if (e.type !== 'passive_hp_change') throw new Error('unreachable');
+    expect(e.target).toBe('B0'); // the trapped target, not the trapper
+    expect(e.hpBefore - e.hpAfter).toBe(Math.floor(175 / 8)); // 1/8 max HP
+  });
+
+  it('endOfTurnEvents: the partial trap expires after ~5 turns and stops chipping', () => {
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [
+        { eventId: 'inf', seq: 1, turn: 1, type: 'move_used', user: 'A0', move: 'Infestation', targets: ['B0'] },
+        { eventId: 't6', seq: 2, turn: 6, type: 'move_used', user: 'A0', move: 'Fake Out', targets: ['B0'] },
+      ],
+    };
+    const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const chip = endOfTurnEvents(ws, b)
+      .map((bld, i) => bld(i + 1, 6))
+      .filter((e) => e.type === 'passive_hp_change' && e.source === 'Infestation');
+    expect(chip).toHaveLength(0); // turn 6 is outside the 4–5 turn window
+  });
 });
 
 describe('broughtInfo — process of elimination for the bring', () => {

@@ -1,0 +1,33 @@
+name: Deploy to Netlify
+
+# Push to main → typecheck, test, build, and publish to the production Netlify site.
+# No manual `netlify deploy` needed. The site id is public; only the auth token is a
+# repo secret (Settings → Secrets and variables → Actions → NETLIFY_AUTH_TOKEN).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: netlify-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      NETLIFY_SITE_ID: 07f1e826-07c9-4cf5-825d-08d9525546ad
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Deploy to Netlify (production)
+        run: npx --yes netlify-cli deploy --prod --dir=dist --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN"

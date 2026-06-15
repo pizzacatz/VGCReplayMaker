@@ -139,6 +139,20 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getAllByText(/fainted/).length).toBeGreaterThan(0);
   });
 
+  it('a fainted Pokémon can be clicked to send out a replacement', () => {
+    const { getAllByText, getByText, queryByText } = render(<Harness />);
+    // faint the lead Incineroar (A0)
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Faint ✕'));
+    // a fainted mon must NOT offer the move/switch menu
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    expect(getByText(/Send out a replacement/)).toBeTruthy();
+    expect(queryByText('Switch out ↔')).toBeNull(); // no normal action menu for a fainted mon
+    // bring in Giratina (the bench mon) — emits a switch out of the fainted Incineroar
+    fireEvent.click(getAllByText('Giratina').at(-1)!);
+    expect(getByText(/\(switch\)/)).toBeTruthy(); // "Incineroar → Giratina (switch)"
+  });
+
   it('damage to 0 HP auto-faints (no KO checkbox needed)', () => {
     const { getAllByText, getByText, getByPlaceholderText } = render(<Harness />);
     fireEvent.click(getAllByText('Incineroar').at(-1)!);

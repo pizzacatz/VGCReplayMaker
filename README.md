@@ -10,7 +10,7 @@ One event log, read two ways: the **solver** consumes only `clean` damage events
 
 ## Status
 
-Implemented end-to-end. The full pipeline — pokepaste import, transcription, the reverse-engineering solver (with honest tagging), aggregation across games, and replay — is built and tested (`npm test`, 93 tests). A local web UI ties it together.
+Implemented end-to-end. The full pipeline — pokepaste import, transcription, the reverse-engineering solver (with honest tagging), aggregation across games, and replay — is built and tested (`npm test`, 156 tests). A web UI ties it together, organized as **Tournament → Match (a best-of set) → Game**: teams are registered once per tournament and reused every game (team-lock), each game owns its event log, and the **match winner is derived from the games' results** (first to ⌈bestOf/2⌉). The Solve tab aggregates every game of a player into one spread estimate.
 
 ## Running the app
 
@@ -25,11 +25,14 @@ The UI has four tabs: **Teams** (paste both teams; omit a spread to have it solv
 
 ## Deploy (Netlify, free, private repo)
 
-The app is a static client-side SPA, hosted on Netlify:
+The app is a static client-side SPA, hosted on Netlify and deployed automatically from GitHub. **Every push to `main` runs `.github/workflows/deploy.yml`** (typecheck → test → build → `netlify deploy --prod`). No manual `netlify deploy` is needed.
 
-1. Sign in at [app.netlify.com](https://app.netlify.com) → **Add new site** → **Import an existing project** → **GitHub** → authorize → pick `pizzacatz/VGCReplayMaker`.
-2. Netlify reads `netlify.toml` (build `npm run build`, publish `dist`) — no extra settings. Click **Deploy**.
-3. Every push to `main` auto-deploys. Set a custom domain under **Domain settings** if desired.
+One-time setup — add the Netlify token as a repo secret:
+
+1. Create a token at [app.netlify.com](https://app.netlify.com) → **User settings → Applications → Personal access tokens → New access token**.
+2. `gh secret set NETLIFY_AUTH_TOKEN` (paste the token), or add it under **Settings → Secrets and variables → Actions**.
+
+The site id (`07f1e826-…`) is non-secret and lives in the workflow. To deploy by hand instead, run `npx netlify-cli deploy --build --prod` from the repo root.
 
 ## Stack
 

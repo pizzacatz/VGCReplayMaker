@@ -13,7 +13,7 @@ function SidePanel({
   const [error, setError] = useState<string | undefined>();
 
   const reparse = (paste: string) => {
-    const { mons, error: err } = parseSide(side, paste);
+    const { mons, error: err } = parseSide(state.idPrefix ?? side, paste);
     setError(err);
     if (err) {
       onChange({ ...state, rawPaste: paste });

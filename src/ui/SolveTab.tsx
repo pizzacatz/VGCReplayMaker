@@ -1,9 +1,15 @@
 import { useState } from 'react';
 import type { MonReport, SolveResult } from '../solver';
+import type { InstanceReport } from '../aggregation';
 import { runSolve, type Workspace } from './model';
+import { activeTournament, solveTournament, teamById, type ScoutingStore } from './store';
 
-export function SolveTab({ ws }: { ws: Workspace }) {
+type Scope = 'game' | 'tournament';
+
+export function SolveTab({ ws, store }: { ws: Workspace; store: ScoutingStore }) {
+  const [scope, setScope] = useState<Scope>('tournament');
   const [result, setResult] = useState<SolveResult | null>(null);
+  const [tResult, setTResult] = useState<Map<string, InstanceReport> | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
 
@@ -11,10 +17,17 @@ export function SolveTab({ ws }: { ws: Workspace }) {
     setBusy(true);
     setError(undefined);
     setResult(null);
+    setTResult(null);
     // Yield so the "Solving…" state paints before the (synchronous) solve runs.
     setTimeout(() => {
       try {
-        setResult(runSolve(ws));
+        if (scope === 'game') {
+          setResult(runSolve(ws));
+        } else {
+          const t = activeTournament(store);
+          if (!t) throw new Error('no active tournament');
+          setTResult(solveTournament(t));
+        }
       } catch (e) {
         setError((e as Error).message);
       } finally {
@@ -23,8 +36,23 @@ export function SolveTab({ ws }: { ws: Workspace }) {
     }, 20);
   };
 
+  const t = activeTournament(store);
+
   return (
     <div>
+      <div className="controls">
+        <button className={scope === 'tournament' ? 'active' : ''} onClick={() => setScope('tournament')}>
+          Whole tournament (per opponent)
+        </button>
+        <button className={scope === 'game' ? 'active' : ''} onClick={() => setScope('game')}>
+          This game only
+        </button>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {scope === 'tournament'
+            ? 'every game of each player feeds one spread — more games, tighter bounds'
+            : 'just the active game'}
+        </span>
+      </div>
       <div className="controls">
         <button className="primary" onClick={solve} disabled={busy}>
           {busy ? 'Solving…' : 'Reverse-engineer spreads'}
@@ -35,6 +63,7 @@ export function SolveTab({ ws }: { ws: Workspace }) {
         </span>
       </div>
       {error && <p className="error">Error: {error}</p>}
+
       {result && (
         <div className="row">
           {result.mons.map((m) => (
@@ -42,6 +71,25 @@ export function SolveTab({ ws }: { ws: Workspace }) {
           ))}
         </div>
       )}
+
+      {tResult &&
+        [...tResult.values()].map((inst) => {
+          const team = teamById(t, inst.instanceId);
+          if (inst.mons.length === 0) return null;
+          return (
+            <div key={inst.instanceId} style={{ marginTop: 16 }}>
+              <h2 style={{ marginBottom: 4 }}>{team?.player ?? inst.instanceId}</h2>
+              {inst.flags.map((f, i) => (
+                <p key={i} className="muted" style={{ fontSize: 12, margin: 0 }}>⚠ {f}</p>
+              ))}
+              <div className="row">
+                {inst.mons.map((m) => (
+                  <MonCard key={m.monId} report={m.report} />
+                ))}
+              </div>
+            </div>
+          );
+        })}
     </div>
   );
 }

@@ -167,6 +167,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     setWs({ ...ws, events: sorted.map((e, i) => ({ ...e, seq: i + 1 })) });
   };
 
+  const actorFainted = actor ? !!actives.find((a) => a.monId === actor)?.fainted : false;
   const actorEntry = actor ? entryOf(actor) : undefined;
   const actorItem = actorEntry?.parsed.item;
   const actorAbility = actorEntry?.parsed.ability;
@@ -320,11 +321,28 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         {actor && (
           <div className="panel" style={{ marginTop: 12, background: 'var(--panel2)' }}>
             <div className="controls" style={{ marginTop: 0 }}>
-              <strong>{monLabel(ws, actor)}{alreadyMega ? ' (Mega)' : ''}</strong>
+              <strong>{monLabel(ws, actor)}{alreadyMega ? ' (Mega)' : ''}{actorFainted ? ' — fainted' : ''}</strong>
               <button onClick={reset}>cancel</button>
             </div>
 
-            {mode === 'move' && !move && (
+            {actorFainted && (() => {
+              const actorSlot = slotOfMon(board, actor);
+              const side = actorSlot ? slotPosition(actorSlot).side : 'A';
+              const bench = benchMons(ws, side, board);
+              return (
+                <div>
+                  <div className="muted" style={{ fontSize: 12 }}>Send out a replacement{actorSlot ? ` (${slotPosition(actorSlot).position === 0 ? 'left' : 'right'} slot)` : ''}:</div>
+                  <div className="chips">
+                    {bench.length === 0 && <span className="muted">no bench Pokémon left to send in</span>}
+                    {bench.map((m) => (
+                      <button key={m.monId} onClick={() => doSwitch(m.monId)}>{m.parsed.species}</button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {!actorFainted && mode === 'move' && !move && (
               <>
                 <div className="grid">
                   {monMoves(actor).map((m) => (
@@ -341,7 +359,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
               </>
             )}
 
-            {mode === 'move' && move && plan && (
+            {!actorFainted && mode === 'move' && move && plan && (
               <div>
                 <div className="controls" style={{ marginTop: 0 }}>
                   <strong>{move}</strong>
@@ -407,7 +425,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
               </div>
             )}
 
-            {mode === 'switch' && (() => {
+            {!actorFainted && mode === 'switch' && (() => {
               const actorSlot = slotOfMon(board, actor);
               if (!actorSlot) return <div className="muted">This Pokémon isn’t active, so it can’t switch.</div>;
               const bench = benchMons(ws, slotPosition(actorSlot).side, board);
@@ -479,12 +497,12 @@ function Board({ actives, actor, onPick, youName, oppName }: { actives: ReturnTy
     <button
       key={m.monId}
       className="slot"
-      style={{ textAlign: 'left', borderColor: actor === m.monId ? 'var(--accent)' : undefined, opacity: m.fainted ? 0.4 : 1 }}
-      disabled={m.fainted}
+      style={{ textAlign: 'left', borderColor: actor === m.monId ? 'var(--accent)' : undefined, opacity: m.fainted ? 0.5 : 1 }}
       onClick={() => onPick(m.monId)}
+      title={m.fainted ? 'fainted — click to send out a replacement' : undefined}
     >
       <strong>{m.species}</strong>
-      <div className="muted" style={{ fontSize: 12 }}>{`${m.hp}/${m.maxHp} HP${m.fainted ? ' · fainted' : ''}`}</div>
+      <div className="muted" style={{ fontSize: 12 }}>{`${m.hp}/${m.maxHp} HP${m.fainted ? ' · fainted — click to replace' : ''}`}</div>
     </button>
   );
   return (
