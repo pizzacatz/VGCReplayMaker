@@ -41,3 +41,14 @@
 ## Verdict
 
 The core external-dependency risk for **Parts 2's math foundation** is **retired**: correct data, correct floor math, exact anchor reproduction. The one concrete adaptation — the 15-roll table — is identified and trivial. Remaining unknowns are **data-list coverage** (needs the official legal list) and **Part-3 viewer coverage** (separate spike), neither of which blocks starting **T3.1 (conversion module)**.
+
+---
+
+## Addendum — Spike 2 (T3.2 prep, `spike/probe-injection.ts`)
+
+Two findings while wiring the shared damage engine:
+
+1. **Showdown ships Champions formats.** `@pkmn/dex` contains `[Gen 9 Champions] VGC 2026` and `[Gen 9 Champions] BSS Reg M`. So Champions is modeled on **Gen 9 mechanics** (confirming the Gen-9 basis in Event Schema §7) and the legal-set data exists in-ecosystem if ever needed. Damage *resolution* = Gen 9 + our `champions.ts` override layer (15-roll table + exception registry).
+2. **The calc ignores direct stat mutation** (`attacker.stats.atk = …` had no effect on damage). So candidate stats are fed via the supported **`evs (=8×SP) + nature (=alignment)`** path. Because the spike proved the calc's stat formula equals our conversion module exactly, this is consistent — and `buildMon` now **asserts** `calc stat === conversion stat` on every prediction, turning R5 into a checked invariant that will trip immediately on any future Champions stat-formula exception.
+
+**Implication for design:** the exception infrastructure (`ExceptionRegistry` in `src/engine/champions.ts`) is the single place discovered ability/odds deviations get registered; the shared `predictHit` engine applies them, so the solver and replay inherit every exception identically (Constitution §A4).

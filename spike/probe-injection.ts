@@ -1,0 +1,14 @@
+import { Generations, Pokemon, Move, calculate } from '@smogon/calc';
+const gen = Generations.get(9);
+const atk = new Pokemon(gen, 'Incineroar', { level: 50, nature: 'Adamant', evs: { atk: 252 } });
+const def = new Pokemon(gen, 'Garchomp', { level: 50 });
+const move = new Move(gen, 'Flare Blitz');
+const before = calculate(gen, atk, def, move).damage as number[];
+const orig = atk.stats.atk;
+(atk.stats as any).atk = orig + 20;
+const after = calculate(gen, atk, def, move).damage as number[];
+console.log('orig atk:', orig, '-> injected:', atk.stats.atk);
+console.log('dmg before:', before[0], '..', before[before.length-1], '(n=' + before.length + ')');
+console.log('dmg after :', after[0], '..', after[after.length-1]);
+console.log('STAT INJECTION RESPECTED:', before[0] !== after[0]);
+export {};
