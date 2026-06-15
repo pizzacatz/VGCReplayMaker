@@ -77,55 +77,88 @@ export interface DamageFactor {
 }
 
 /**
- * Build the per-hit damage factor: scan the candidate SP grid for the attacker's
- * offensive stat × the defender's defensive stat, keeping every pair whose
+ * The per-cell predicted rolls for a whole SP grid — everything about a hit
+ * EXCEPT the observed damage. Cached, because the observed damage only *filters*
+ * this grid: the same matchup (attacker spec × defender spec × move × crit ×
+ * context × hit count) recurs across turns and across re-solves, so the 33×33
+ * predictions are computed once and reused. Stored as per-sub-hit rolls so single
+ * and multi-hit share one code path (single hit = one sub-hit array).
+ */
+interface RollGrid {
+  offensiveStat: string;
+  defensiveStat: string;
+  cells: Array<{ attackerSp: number; defenderSp: number; perHitRolls: number[][] }>;
+}
+
+const gridCache = new Map<string, RollGrid>();
+const GRID_CACHE_CAP = 256; // ~each grid is 1089 cells; FIFO-evict to bound memory
+
+/** Clear the memoized roll grids (tests / explicit reset). */
+export function clearDamageFactorCache(): void {
+  gridCache.clear();
+}
+
+/** Canonical, content-based key — different inputs never collide (a miss is safe, only slower). */
+function gridKey(hit: CleanHit): string {
+  const spec = (s: MonSpec) => ({ s: s.species, a: s.alignment, i: s.item ?? null, b: s.ability ?? null, l: s.level ?? 50 });
+  const ctx = hit.context ? Object.fromEntries(Object.entries(hit.context).sort(([x], [y]) => x.localeCompare(y))) : null;
+  return JSON.stringify([spec(hit.attacker), spec(hit.defender), hit.move, !!hit.crit, hit.hits ?? 1, ctx]);
+}
+
+function buildOrGetGrid(gen: Gen, hit: CleanHit, registry: ExceptionRegistry): RollGrid {
+  const key = gridKey(hit);
+  const cached = gridCache.get(key);
+  if (cached) return cached;
+
+  const multiHit = hit.hits !== undefined && hit.hits > 1;
+  const cells: RollGrid['cells'] = [];
+  let offensiveStat = '';
+  let defensiveStat = '';
+  for (let attackerSp = SP_MIN; attackerSp <= SP_MAX; attackerSp++) {
+    for (let defenderSp = SP_MIN; defenderSp <= SP_MAX; defenderSp++) {
+      const input: HitInput = { attacker: hit.attacker, attackerSp, defender: hit.defender, defenderSp, move: hit.move, crit: hit.crit, context: hit.context };
+      if (multiHit) {
+        const r = predictMultiHit(gen, input, hit.hits!, registry);
+        offensiveStat = r.offensiveStat;
+        defensiveStat = r.defensiveStat;
+        cells.push({ attackerSp, defenderSp, perHitRolls: r.perHitRolls });
+      } else {
+        const r = predictHit(gen, input, registry);
+        offensiveStat = r.offensiveStat;
+        defensiveStat = r.defensiveStat;
+        cells.push({ attackerSp, defenderSp, perHitRolls: [r.rolls] });
+      }
+    }
+  }
+  const grid: RollGrid = { offensiveStat, defensiveStat, cells };
+  if (gridCache.size >= GRID_CACHE_CAP) gridCache.delete(gridCache.keys().next().value!);
+  gridCache.set(key, grid);
+  return grid;
+}
+
+/**
+ * Build the per-hit damage factor: keep every (attackerSp, defenderSp) pair whose
  * predicted rolls can produce the observed damage. The feasible set is the
  * factor's support (Phase A); the weights are its likelihood (Phase B).
  *
- * NOTE: this is the exact, brute-force form — 33×33 predictions per hit. It is
- * the ground-truth the Constraint Model §10 algorithm (enumeration vs sampling)
- * is validated against; optimization comes later, correctness first.
+ * The 33×33 predictions are memoized by matchup (everything but the observed
+ * damage); the observed damage is applied here as a cheap likelihood filter. So a
+ * repeated matchup — same mons/move/context across turns, or a re-solve after
+ * excluding a hit — is near-instant. A single hit is one sub-hit array, so the
+ * convolution likelihood reduces to the plain roll likelihood.
  */
 export function damageFactor(
   gen: Gen,
   hit: CleanHit,
   registry: ExceptionRegistry = championsExceptions,
 ): DamageFactor {
+  const grid = buildOrGetGrid(gen, hit, registry);
   const feasible: FeasiblePair[] = [];
-  let offensiveStat = '';
-  let defensiveStat = '';
-  let scanned = 0;
-
-  const multiHit = hit.hits !== undefined && hit.hits > 1;
-  for (let attackerSp = SP_MIN; attackerSp <= SP_MAX; attackerSp++) {
-    for (let defenderSp = SP_MIN; defenderSp <= SP_MAX; defenderSp++) {
-      const input: HitInput = {
-        attacker: hit.attacker,
-        attackerSp,
-        defender: hit.defender,
-        defenderSp,
-        move: hit.move,
-        crit: hit.crit,
-        context: hit.context,
-      };
-      let weight: number;
-      if (multiHit) {
-        const r = predictMultiHit(gen, input, hit.hits!, registry);
-        offensiveStat = r.offensiveStat;
-        defensiveStat = r.defensiveStat;
-        weight = multiHitLikelihood(hit.observedDamage, r.perHitRolls); // observed = the summed total
-      } else {
-        const { rolls, offensiveStat: off, defensiveStat: def } = predictHit(gen, input, registry);
-        offensiveStat = off;
-        defensiveStat = def;
-        weight = likelihood(hit.observedDamage, rolls);
-      }
-      scanned++;
-      if (weight > 0) feasible.push({ attackerSp, defenderSp, weight });
-    }
+  for (const cell of grid.cells) {
+    const weight = multiHitLikelihood(hit.observedDamage, cell.perHitRolls);
+    if (weight > 0) feasible.push({ attackerSp: cell.attackerSp, defenderSp: cell.defenderSp, weight });
   }
-
-  return { feasible, offensiveStat, defensiveStat, scanned };
+  return { feasible, offensiveStat: grid.offensiveStat, defensiveStat: grid.defensiveStat, scanned: grid.cells.length };
 }
 
 /** Marginal feasible SP values for the attacker's offensive stat (projection of the band). */

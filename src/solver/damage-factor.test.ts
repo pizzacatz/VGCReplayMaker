@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { championsGen, predictHit, predictMultiHit, type MonSpec } from '../engine';
-import { attackerMarginal, damageFactor, defenderMarginal, likelihood, multiHitLikelihood } from './damage-factor';
+import { attackerMarginal, clearDamageFactorCache, damageFactor, defenderMarginal, likelihood, multiHitLikelihood } from './damage-factor';
 
 const gen = championsGen();
 
@@ -97,5 +97,27 @@ describe('multi-hit damage factor (the hits convolution recovers the attacker st
     const factor = damageFactor(gen, { attacker: maushold, defender: garchomp, move: 'Population Bomb', observedDamage: observed, hits: 3 });
     expect(factor.offensiveStat).toBe('atk');
     expect(attackerMarginal(factor)).toContain(TRUE_ATK); // truth survives
+  });
+});
+
+describe('damage factor memoization (caching must not change results)', () => {
+  it('a cache hit equals the cold compute, and a re-clear recomputes identically', () => {
+    clearDamageFactorCache();
+    const rolls = predictHit(gen, { attacker: incineroar, attackerSp: 12, defender: garchomp, defenderSp: 8, move: 'Flare Blitz' }).rolls;
+    const hit = { attacker: incineroar, defender: garchomp, move: 'Flare Blitz', observedDamage: rolls[7]! };
+    const cold = damageFactor(gen, hit);
+    const warm = damageFactor(gen, hit); // served from cache
+    expect(warm.feasible).toEqual(cold.feasible);
+    expect(warm.offensiveStat).toBe('atk');
+    clearDamageFactorCache();
+    expect(damageFactor(gen, hit).feasible).toEqual(cold.feasible); // recompute matches
+  });
+
+  it('the same matchup with a different observed damage reuses the grid but filters differently', () => {
+    clearDamageFactorCache();
+    const rolls = predictHit(gen, { attacker: incineroar, attackerSp: 12, defender: garchomp, defenderSp: 8, move: 'Flare Blitz' }).rolls;
+    const lo = damageFactor(gen, { attacker: incineroar, defender: garchomp, move: 'Flare Blitz', observedDamage: rolls[0]! });
+    const hi = damageFactor(gen, { attacker: incineroar, defender: garchomp, move: 'Flare Blitz', observedDamage: rolls[14]! });
+    expect(lo.feasible).not.toEqual(hi.feasible); // min-roll band ≠ max-roll band
   });
 });
