@@ -21,7 +21,15 @@ npm test         # the headless test suite
 npm run build    # production bundle
 ```
 
-The UI has four tabs: **Teams** (paste both teams; omit a spread to have it solved), **Transcribe** (log the match event by event, with reconstructed-state confirmation), **Solve** (reverse-engineer spreads with per-stat `read`/`locked`/`bounded`/`guessed` tags + missing-evidence notes), and **Replay** (step the match forward/backward with live HP/board).
+The UI has four tabs: **Teams** (paste both teams; omit a spread to have it solved), **Transcribe** (log the match event by event, with reconstructed-state confirmation), **Solve** (reverse-engineer spreads with per-stat `read`/`locked`/`bounded`/`guessed` tags + missing-evidence notes), and **Replay** (the official Showdown replay engine, or a simple board).
+
+## Deploy (Netlify, free, private repo)
+
+The app is a static client-side SPA, hosted on Netlify:
+
+1. Sign in at [app.netlify.com](https://app.netlify.com) → **Add new site** → **Import an existing project** → **GitHub** → authorize → pick `pizzacatz/VGCReplayMaker`.
+2. Netlify reads `netlify.toml` (build `npm run build`, publish `dist`) — no extra settings. Click **Deploy**.
+3. Every push to `main` auto-deploys. Set a custom domain under **Domain settings** if desired.
 
 ## Stack
 
