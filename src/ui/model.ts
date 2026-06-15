@@ -385,18 +385,31 @@ export interface Effectiveness {
   text: string;
 }
 
+/** Abilities that grant full immunity to a move type (open sheets → the ability is known). */
+const ABILITY_IMMUNITIES: Record<string, string> = {
+  Levitate: 'Ground', 'Earth Eater': 'Ground',
+  'Flash Fire': 'Fire', 'Well-Baked Body': 'Fire',
+  'Water Absorb': 'Water', 'Storm Drain': 'Water', 'Dry Skin': 'Water',
+  'Volt Absorb': 'Electric', 'Lightning Rod': 'Electric', 'Motor Drive': 'Electric',
+  'Sap Sipper': 'Grass',
+};
+
 /**
  * Type effectiveness of a move against a defender, derived from the dex type chart
- * (move type vs defender's current types) — so the transcriber doesn't pick it.
- * Returns null for status/unknown moves. Note: does not account for ability-based
- * immunities (Levitate, etc.) — those show up as 0 damage on screen regardless.
+ * (move type vs defender's current types), plus ability-based immunities when the
+ * defender's ability is known (Levitate, the absorbs, Sap Sipper, …). Returns null
+ * for status/unknown moves.
  */
-export function typeEffectiveness(move: string, defenderSpecies: string): Effectiveness | null {
+export function typeEffectiveness(move: string, defenderSpecies: string, defenderAbility?: string): Effectiveness | null {
   try {
     const m = Dex.moves.get(move);
     if (!m.exists || m.category === 'Status') return null;
     const sp = Dex.species.get(defenderSpecies);
     if (!sp.exists) return null;
+    // Ability immunity overrides the type chart (the move simply does nothing / is absorbed).
+    if (defenderAbility && ABILITY_IMMUNITIES[defenderAbility] === m.type) {
+      return { mult: 0, label: '0x', text: `Immune — ${defenderAbility} (0x)` };
+    }
     const ops = Dex as unknown as DexTypeOps;
     let mult = 1;
     for (const dt of sp.types) {

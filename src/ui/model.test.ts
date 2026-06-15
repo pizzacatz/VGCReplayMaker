@@ -310,3 +310,19 @@ describe('broughtInfo — process of elimination for the bring', () => {
     expect(info.confirmed).toBe(false); // only 3 distinct seen
   });
 });
+
+describe('typeEffectiveness — ability immunities (open sheets give us the ability)', () => {
+  it('Levitate makes a Ground move immune; the same mon without it is not', () => {
+    expect(typeEffectiveness('Earthquake', 'Garchomp', 'Levitate')?.mult).toBe(0);
+    expect(typeEffectiveness('Earthquake', 'Garchomp', 'Levitate')?.text).toMatch(/Levitate/);
+    expect(typeEffectiveness('Earthquake', 'Garchomp')?.mult).toBe(1); // Ground vs Dragon/Ground = neutral 
+  });
+  it('the absorbs and Sap Sipper grant immunity to their type', () => {
+    expect(typeEffectiveness('Surf', 'Incineroar', 'Water Absorb')?.mult).toBe(0);
+    expect(typeEffectiveness('Thunderbolt', 'Garchomp', 'Volt Absorb')?.mult).toBe(0);
+    expect(typeEffectiveness('Energy Ball', 'Garchomp', 'Sap Sipper')?.mult).toBe(0);
+  });
+  it('an unrelated ability leaves the type chart untouched', () => {
+    expect(typeEffectiveness('Ice Beam', 'Garchomp', 'Rough Skin')?.mult).toBe(4);
+  });
+});

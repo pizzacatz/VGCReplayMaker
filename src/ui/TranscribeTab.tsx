@@ -181,7 +181,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
 
   // effectiveness derived from the dex (move type vs the target's current types)
   const effOf = (targetMonId: string): ReturnType<typeof typeEffectiveness> =>
-    move ? typeEffectiveness(move, actives.find((a) => a.monId === targetMonId)?.species ?? '') : null;
+    move ? typeEffectiveness(move, actives.find((a) => a.monId === targetMonId)?.species ?? '', monAbility(ws, targetMonId)) : null;
 
   const actorFainted = actor ? !!actives.find((a) => a.monId === actor)?.fainted : false;
   const actorEntry = actor ? entryOf(actor) : undefined;
