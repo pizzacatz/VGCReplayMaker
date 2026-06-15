@@ -23,6 +23,7 @@
 import { baseStatOf, championsExceptions, roleOf, type ExceptionRegistry, type Gen, type MonSpec } from '../engine';
 import { maxHpToSpHp, spToFinal, SP_BUDGET, SP_MAX, SP_MIN, type StatKey } from '../conversion';
 import { damageFactor } from './damage-factor';
+import { structuralPrior, type SpreadPrior } from './prior';
 
 export type NonHpStat = Exclude<StatKey, 'hp'>;
 export const NON_HP_STATS: readonly NonHpStat[] = ['atk', 'def', 'spa', 'spd', 'spe'];
@@ -75,6 +76,69 @@ export interface PhaseAResult {
   spHp: Map<string, number>;
   /** non-empty when clean constraints are unsatisfiable; never a force-fit */
   contradictions: string[];
+}
+
+// ── Phase B output (a first cut of the Solver Output Contract, T1.2) ──────────
+
+export type StatTag = 'read' | 'locked' | 'bounded' | 'guessed';
+export type AllStat = NonHpStat | 'hp';
+
+export interface StatReport {
+  stat: AllStat;
+  tag: StatTag;
+  /** most likely SP (HP: the read value) */
+  best: number;
+  /** marginal posterior over SP, descending by probability */
+  distribution: Array<{ sp: number; p: number }>;
+  /** for `bounded`/`locked`: the feasible SP span */
+  range?: [number, number];
+}
+
+export interface SpreadCandidate {
+  spread: Record<NonHpStat, number>;
+  confidence: number;
+}
+
+export interface MonReport {
+  monId: string;
+  species: string;
+  spHp: number;
+  perStat: StatReport[];
+  headline?: SpreadCandidate;
+  candidates: SpreadCandidate[];
+  /** posterior mass not covered by the listed candidates */
+  remainingMass: number;
+  /** set when this mon's clean constraints are unsatisfiable (no force-fit) */
+  contradiction?: string;
+  /** set when the feasible space was too large to weight exactly (Phase A still shown) */
+  note?: string;
+}
+
+export interface SolveResult {
+  mons: MonReport[];
+  contradictions: string[];
+}
+
+export interface SolveOptions {
+  prior?: SpreadPrior;
+  /** how many ranked full spreads per mon (default 5) */
+  maxCandidates?: number;
+  /** enumeration ceiling per mon / per component before degrading to Phase-A ranges */
+  enumCap?: number;
+}
+
+interface HitFactor {
+  attackerId: string;
+  defenderId: string;
+  offStat: NonHpStat;
+  defStat: NonHpStat;
+  weights: Map<string, number>;
+}
+
+interface SpeedRelation {
+  firstId: string;
+  secondId: string;
+  allowed: Set<string>;
 }
 
 type VarKey = string; // `${monId}|${stat}`
@@ -192,6 +256,12 @@ export class ConstraintSystem {
   private readonly byVar = new Map<VarKey, Constraint[]>();
   private readonly spHp = new Map<string, number>();
   private readonly monIds: string[] = [];
+  private readonly specs = new Map<string, MonSpec>();
+  // Phase-B inputs: per-hit likelihood weights, speed feasibility, and which
+  // stats a hard factor actually touched (drives guessed-vs-bounded tagging).
+  private readonly hitFactors: HitFactor[] = [];
+  private readonly speedRelations: SpeedRelation[] = [];
+  private readonly touched = new Map<string, Set<NonHpStat>>();
 
   constructor(
     gen: Gen,
@@ -200,10 +270,11 @@ export class ConstraintSystem {
     speedFacts: SpeedFact[] = [],
     registry: ExceptionRegistry = championsExceptions,
   ) {
-    const specs = new Map<string, MonSpec>();
+    const specs = this.specs;
     for (const mon of mons) {
       this.monIds.push(mon.id);
       specs.set(mon.id, mon.spec);
+      this.touched.set(mon.id, new Set());
       // HP is READ (B5): SP_hp = maxHp − base − 75. An invalid HP raises (R3), never clamps.
       const spHp = maxHpToSpHp(baseStatOf(gen, mon.spec.species, 'hp'), mon.observedMaxHp);
       this.spHp.set(mon.id, spHp);
@@ -228,6 +299,16 @@ export class ConstraintSystem {
         registry,
       );
       const allowed = new Set(factor.feasible.map((p) => `${p.attackerSp},${p.defenderSp}`));
+      const weights = new Map(factor.feasible.map((p) => [`${p.attackerSp},${p.defenderSp}`, p.weight]));
+      this.hitFactors.push({
+        attackerId: hit.attackerId,
+        defenderId: hit.defenderId,
+        offStat: factor.offensiveStat as NonHpStat,
+        defStat: factor.defensiveStat as NonHpStat,
+        weights,
+      });
+      this.touched.get(hit.attackerId)!.add(factor.offensiveStat as NonHpStat);
+      this.touched.get(hit.defenderId)!.add(factor.defensiveStat as NonHpStat);
       this.addConstraint(
         new BinaryRelation(
           vkey(hit.attackerId, factor.offensiveStat),
@@ -259,6 +340,9 @@ export class ConstraintSystem {
           if (ok) allowed.add(`${a},${b}`);
         }
       }
+      this.speedRelations.push({ firstId: fact.firstId, secondId: fact.secondId, allowed });
+      this.touched.get(fact.firstId)!.add('spe');
+      this.touched.get(fact.secondId)!.add('spe');
       this.addConstraint(
         new BinaryRelation(
           vkey(fact.firstId, 'spe'),
@@ -321,4 +405,290 @@ export class ConstraintSystem {
     }
     return { domains, spHp: new Map(this.spHp), contradictions };
   }
+
+  /**
+   * Phase A + Phase B (Constraint Model §5–8): propagate hard constraints, then
+   * weight the surviving feasible space by `prior × likelihood` and report a
+   * tagged posterior per mon. Tags come from Phase A (never the prior, §E4).
+   */
+  solve(options: SolveOptions = {}): SolveResult {
+    const prior = options.prior ?? structuralPrior;
+    const maxCandidates = options.maxCandidates ?? 5;
+    const enumCap = options.enumCap ?? 500_000;
+
+    const phaseA = this.propagate();
+    const components = this.components();
+    const reports = new Map<string, MonReport>();
+
+    for (const monId of this.monIds) {
+      const perStatDomains = phaseA.domains.get(monId)!;
+      const empty = NON_HP_STATS.some((s) => perStatDomains.get(s)!.length === 0);
+      reports.set(monId, {
+        monId,
+        species: this.specs.get(monId)!.species,
+        spHp: this.spHp.get(monId)!,
+        perStat: [],
+        candidates: [],
+        remainingMass: 1,
+        ...(empty
+          ? { contradiction: phaseA.contradictions.find((c) => c.includes(monId)) ?? 'no feasible spread' }
+          : {}),
+      });
+    }
+
+    for (const component of components) {
+      // skip a component that contains a contradicted mon — already flagged.
+      if (component.some((m) => reports.get(m)!.contradiction)) continue;
+      this.solveComponent(component, phaseA, prior, maxCandidates, enumCap, reports);
+    }
+
+    return {
+      mons: this.monIds.map((id) => finalizeReport(reports.get(id)!, this.spHp.get(id)!)),
+      contradictions: phaseA.contradictions,
+    };
+  }
+
+  /** Connected components of mons, linked by shared damage hits and speed facts. */
+  private components(): string[][] {
+    const parent = new Map<string, string>();
+    for (const id of this.monIds) parent.set(id, id);
+    const find = (x: string): string => {
+      let r = x;
+      while (parent.get(r) !== r) r = parent.get(r)!;
+      while (parent.get(x) !== r) {
+        const next = parent.get(x)!;
+        parent.set(x, r);
+        x = next;
+      }
+      return r;
+    };
+    const union = (a: string, b: string): void => {
+      parent.set(find(a), find(b));
+    };
+    for (const f of this.hitFactors) union(f.attackerId, f.defenderId);
+    for (const s of this.speedRelations) union(s.firstId, s.secondId);
+    const groups = new Map<string, string[]>();
+    for (const id of this.monIds) {
+      const root = find(id);
+      (groups.get(root) ?? groups.set(root, []).get(root)!).push(id);
+    }
+    return [...groups.values()];
+  }
+
+  private solveComponent(
+    component: string[],
+    phaseA: PhaseAResult,
+    prior: SpreadPrior,
+    maxCandidates: number,
+    enumCap: number,
+    reports: Map<string, MonReport>,
+  ): void {
+    // Enumerate each mon's feasible spreads (Phase-A domains ∩ budget equality).
+    const spreadsByMon = new Map<string, Array<Record<NonHpStat, number>>>();
+    for (const monId of component) {
+      const doms: Record<NonHpStat, number[]> = Object.fromEntries(
+        NON_HP_STATS.map((s) => [s, phaseA.domains.get(monId)!.get(s)!]),
+      ) as Record<NonHpStat, number[]>;
+      const target = SP_BUDGET - this.spHp.get(monId)!;
+      const list = enumerateSpreads(doms, target, enumCap);
+      if (list === null) {
+        // Too large to weight exactly — degrade to Phase-A ranges, honestly noted.
+        for (const m of component) {
+          const r = reports.get(m)!;
+          r.note = 'feasible space too large to weight exactly; showing Phase-A feasible ranges';
+          r.perStat = phaseAStatReports(m, phaseA, this.spHp.get(m)!, this.touched.get(m)!);
+        }
+        return;
+      }
+      spreadsByMon.set(monId, list);
+    }
+
+    const hits = this.hitFactors.filter((f) => component.includes(f.attackerId));
+    const speeds = this.speedRelations.filter((s) => component.includes(s.firstId));
+
+    // Joint weight accumulation over the component (DFS over mons).
+    const monSpreadMass = new Map<string, Map<string, number>>(); // monId → spreadKey → mass
+    const statMass = new Map<string, Map<NonHpStat, Map<number, number>>>();
+    for (const m of component) {
+      monSpreadMass.set(m, new Map());
+      statMass.set(m, new Map(NON_HP_STATS.map((s) => [s, new Map<number, number>()])));
+    }
+    let totalMass = 0;
+    let leaves = 0;
+    const assignment = new Map<string, Record<NonHpStat, number>>();
+
+    const dfs = (i: number, weight: number): void => {
+      if (weight === 0) return;
+      if (i === component.length) {
+        let w = weight;
+        for (const h of hits) {
+          const off = assignment.get(h.attackerId)![h.offStat];
+          const def = assignment.get(h.defenderId)![h.defStat];
+          w *= h.weights.get(`${off},${def}`) ?? 0;
+          if (w === 0) return;
+        }
+        for (const s of speeds) {
+          if (!s.allowed.has(`${assignment.get(s.firstId)!.spe},${assignment.get(s.secondId)!.spe}`)) return;
+        }
+        leaves++;
+        totalMass += w;
+        for (const m of component) {
+          const spread = assignment.get(m)!;
+          const key = NON_HP_STATS.map((s) => spread[s]).join('/');
+          const sm = monSpreadMass.get(m)!;
+          sm.set(key, (sm.get(key) ?? 0) + w);
+          const stm = statMass.get(m)!;
+          for (const s of NON_HP_STATS) {
+            const map = stm.get(s)!;
+            map.set(spread[s], (map.get(spread[s]) ?? 0) + w);
+          }
+        }
+        return;
+      }
+      const monId = component[i]!;
+      for (const spread of spreadsByMon.get(monId)!) {
+        assignment.set(monId, spread);
+        dfs(i + 1, weight * prior.weight(spread, this.spHp.get(monId)!));
+      }
+    };
+    dfs(0, 1);
+
+    if (totalMass === 0 || leaves === 0) {
+      // Feasible per Phase A but no joint support (rare numeric corner) — degrade.
+      for (const m of component) {
+        const r = reports.get(m)!;
+        r.note = 'no weighted joint support; showing Phase-A feasible ranges';
+        r.perStat = phaseAStatReports(m, phaseA, this.spHp.get(m)!, this.touched.get(m)!);
+      }
+      return;
+    }
+
+    for (const monId of component) {
+      const report = reports.get(monId)!;
+      report.perStat = buildStatReports(
+        monId,
+        statMass.get(monId)!,
+        totalMass,
+        this.spHp.get(monId)!,
+        phaseA.domains.get(monId)!,
+        this.touched.get(monId)!,
+      );
+      const ranked = [...monSpreadMass.get(monId)!.entries()]
+        .map(([key, mass]) => ({
+          spread: spreadFromKey(key),
+          confidence: mass / totalMass,
+        }))
+        .sort((a, b) => b.confidence - a.confidence);
+      report.candidates = ranked.slice(0, maxCandidates);
+      if (ranked[0]) report.headline = ranked[0];
+      report.remainingMass = 1 - report.candidates.reduce((acc, c) => acc + c.confidence, 0);
+    }
+  }
+}
+
+const spreadFromKey = (key: string): Record<NonHpStat, number> => {
+  const parts = key.split('/').map(Number);
+  return { atk: parts[0]!, def: parts[1]!, spa: parts[2]!, spd: parts[3]!, spe: parts[4]! };
+};
+
+/** Enumerate every spread whose stats lie in `doms` and sum to `target`; null if > cap. */
+function enumerateSpreads(
+  doms: Record<NonHpStat, number[]>,
+  target: number,
+  cap: number,
+): Array<Record<NonHpStat, number>> | null {
+  const order: NonHpStat[] = ['atk', 'def', 'spa', 'spd', 'spe'];
+  const suffixMin = new Array<number>(order.length + 1).fill(0);
+  const suffixMax = new Array<number>(order.length + 1).fill(0);
+  for (let i = order.length - 1; i >= 0; i--) {
+    const d = doms[order[i]!];
+    suffixMin[i] = suffixMin[i + 1]! + (d.length ? Math.min(...d) : Infinity);
+    suffixMax[i] = suffixMax[i + 1]! + (d.length ? Math.max(...d) : -Infinity);
+  }
+  const results: Array<Record<NonHpStat, number>> = [];
+  const cur: Record<string, number> = {};
+  let overflow = false;
+  const rec = (i: number, remaining: number): void => {
+    if (overflow) return;
+    if (i === order.length) {
+      if (remaining === 0) {
+        results.push({ ...cur } as Record<NonHpStat, number>);
+        if (results.length > cap) overflow = true;
+      }
+      return;
+    }
+    for (const v of doms[order[i]!]) {
+      const rem = remaining - v;
+      if (rem < suffixMin[i + 1]! || rem > suffixMax[i + 1]!) continue;
+      cur[order[i]!] = v;
+      rec(i + 1, rem);
+      if (overflow) return;
+    }
+  };
+  rec(0, target);
+  return overflow ? null : results;
+}
+
+/** Tag a stat from Phase A: never `locked` unless a factor pinned it to one value (§E4). */
+function tagFor(stat: AllStat, touched: boolean, domainSize: number): StatTag {
+  if (stat === 'hp') return 'read';
+  if (!touched) return 'guessed'; // no relevant observation — the prior is talking
+  return domainSize === 1 ? 'locked' : 'bounded';
+}
+
+function buildStatReports(
+  monId: string,
+  statMass: Map<NonHpStat, Map<number, number>>,
+  totalMass: number,
+  spHp: number,
+  domains: Map<NonHpStat, number[]>,
+  touched: Set<NonHpStat>,
+): StatReport[] {
+  const reports: StatReport[] = [{ stat: 'hp', tag: 'read', best: spHp, distribution: [{ sp: spHp, p: 1 }] }];
+  for (const stat of NON_HP_STATS) {
+    const dist = [...statMass.get(stat)!.entries()]
+      .map(([sp, mass]) => ({ sp, p: mass / totalMass }))
+      .sort((a, b) => b.p - a.p);
+    const domain = domains.get(stat)!;
+    const report: StatReport = {
+      stat,
+      tag: tagFor(stat, touched.has(stat), domain.length),
+      best: dist[0]?.sp ?? domain[0] ?? 0,
+      distribution: dist,
+    };
+    if (domain.length > 0) report.range = [Math.min(...domain), Math.max(...domain)];
+    reports.push(report);
+  }
+  return reports;
+}
+
+/** Degraded path: report Phase-A feasible ranges as uniform distributions (honest). */
+function phaseAStatReports(
+  monId: string,
+  phaseA: PhaseAResult,
+  spHp: number,
+  touched: Set<NonHpStat>,
+): StatReport[] {
+  const reports: StatReport[] = [{ stat: 'hp', tag: 'read', best: spHp, distribution: [{ sp: spHp, p: 1 }] }];
+  for (const stat of NON_HP_STATS) {
+    const domain = phaseA.domains.get(monId)!.get(stat)!;
+    const p = domain.length ? 1 / domain.length : 0;
+    const report: StatReport = {
+      stat,
+      tag: tagFor(stat, touched.has(stat), domain.length),
+      best: domain[0] ?? 0,
+      distribution: domain.map((sp) => ({ sp, p })),
+    };
+    if (domain.length > 0) report.range = [Math.min(...domain), Math.max(...domain)];
+    reports.push(report);
+  }
+  return reports;
+}
+
+/** Ensure a contradicted/empty report still has a minimal HP read entry. */
+function finalizeReport(report: MonReport, spHp: number): MonReport {
+  if (report.perStat.length === 0) {
+    report.perStat = [{ stat: 'hp', tag: 'read', best: spHp, distribution: [{ sp: spHp, p: 1 }] }];
+  }
+  return report;
 }
