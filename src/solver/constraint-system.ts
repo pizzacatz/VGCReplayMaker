@@ -99,6 +99,9 @@ export interface SpreadCandidate {
   confidence: number;
 }
 
+/** How a mon's posterior was computed (Constraint Model §10 — recorded for transparency). */
+export type SolveMethod = 'exact' | 'sampled' | 'phaseA-ranges';
+
 export interface MonReport {
   monId: string;
   species: string;
@@ -108,6 +111,8 @@ export interface MonReport {
   candidates: SpreadCandidate[];
   /** posterior mass not covered by the listed candidates */
   remainingMass: number;
+  /** which method produced this posterior */
+  method?: SolveMethod;
   /** set when this mon's clean constraints are unsatisfiable (no force-fit) */
   contradiction?: string;
   /** set when the feasible space was too large to weight exactly (Phase A still shown) */
@@ -119,12 +124,35 @@ export interface SolveResult {
   contradictions: string[];
 }
 
+export interface SampleConfig {
+  iterations: number;
+  burnIn: number;
+  thin: number;
+  seed: number;
+  /** attempts to find a feasible starting joint before degrading */
+  initTries: number;
+}
+
+export const DEFAULT_SAMPLE_CONFIG: SampleConfig = {
+  iterations: 6000,
+  burnIn: 1000,
+  thin: 4,
+  seed: 0x9e3779b9,
+  initTries: 200,
+};
+
 export interface SolveOptions {
   prior?: SpreadPrior;
   /** how many ranked full spreads per mon (default 5) */
   maxCandidates?: number;
-  /** enumeration ceiling per mon / per component before degrading to Phase-A ranges */
+  /** enumeration ceiling per mon / per component before falling back to sampling */
   enumCap?: number;
+  /**
+   * 'auto' (default): exact enumeration when a component fits under enumCap, else
+   * Gibbs sampling. 'exact'/'sample' force a method (Constraint Model §10).
+   */
+  method?: 'auto' | 'exact' | 'sample';
+  sampleConfig?: Partial<SampleConfig>;
 }
 
 interface HitFactor {
@@ -436,10 +464,21 @@ export class ConstraintSystem {
       });
     }
 
+    const method = options.method ?? 'auto';
+    const sampleConfig: SampleConfig = { ...DEFAULT_SAMPLE_CONFIG, ...options.sampleConfig };
+
     for (const component of components) {
       // skip a component that contains a contradicted mon — already flagged.
       if (component.some((m) => reports.get(m)!.contradiction)) continue;
-      this.solveComponent(component, phaseA, prior, maxCandidates, enumCap, reports);
+      if (method === 'sample') {
+        this.sampleComponent(component, phaseA, prior, maxCandidates, sampleConfig, reports);
+        continue;
+      }
+      const handled = this.exactComponent(component, phaseA, prior, maxCandidates, enumCap, reports);
+      if (handled) continue;
+      // too large to enumerate exactly:
+      if (method === 'exact') this.degradeComponent(component, phaseA, reports);
+      else this.sampleComponent(component, phaseA, prior, maxCandidates, sampleConfig, reports);
     }
 
     return {
@@ -475,74 +514,55 @@ export class ConstraintSystem {
     return [...groups.values()];
   }
 
-  private solveComponent(
+  private componentHits(component: string[]): HitFactor[] {
+    return this.hitFactors.filter((f) => component.includes(f.attackerId));
+  }
+
+  private componentSpeeds(component: string[]): SpeedRelation[] {
+    return this.speedRelations.filter((s) => component.includes(s.firstId));
+  }
+
+  private domainArrays(monId: string, phaseA: PhaseAResult): Record<NonHpStat, number[]> {
+    return Object.fromEntries(
+      NON_HP_STATS.map((s) => [s, phaseA.domains.get(monId)!.get(s)!]),
+    ) as Record<NonHpStat, number[]>;
+  }
+
+  /** Exact enumeration over the component. Returns false (handled nothing) if any mon exceeds enumCap. */
+  private exactComponent(
     component: string[],
     phaseA: PhaseAResult,
     prior: SpreadPrior,
     maxCandidates: number,
     enumCap: number,
     reports: Map<string, MonReport>,
-  ): void {
-    // Enumerate each mon's feasible spreads (Phase-A domains ∩ budget equality).
+  ): boolean {
     const spreadsByMon = new Map<string, Array<Record<NonHpStat, number>>>();
     for (const monId of component) {
-      const doms: Record<NonHpStat, number[]> = Object.fromEntries(
-        NON_HP_STATS.map((s) => [s, phaseA.domains.get(monId)!.get(s)!]),
-      ) as Record<NonHpStat, number[]>;
       const target = SP_BUDGET - this.spHp.get(monId)!;
-      const list = enumerateSpreads(doms, target, enumCap);
-      if (list === null) {
-        // Too large to weight exactly — degrade to Phase-A ranges, honestly noted.
-        for (const m of component) {
-          const r = reports.get(m)!;
-          r.note = 'feasible space too large to weight exactly; showing Phase-A feasible ranges';
-          r.perStat = phaseAStatReports(m, phaseA, this.spHp.get(m)!, this.touched.get(m)!);
-        }
-        return;
-      }
+      const list = enumerateSpreads(this.domainArrays(monId, phaseA), target, enumCap);
+      if (list === null) return false; // too large — caller will sample or degrade
       spreadsByMon.set(monId, list);
     }
 
-    const hits = this.hitFactors.filter((f) => component.includes(f.attackerId));
-    const speeds = this.speedRelations.filter((s) => component.includes(s.firstId));
-
-    // Joint weight accumulation over the component (DFS over mons).
-    const monSpreadMass = new Map<string, Map<string, number>>(); // monId → spreadKey → mass
+    const hits = this.componentHits(component);
+    const speeds = this.componentSpeeds(component);
+    const monSpreadMass = new Map<string, Map<string, number>>();
     const statMass = new Map<string, Map<NonHpStat, Map<number, number>>>();
     for (const m of component) {
       monSpreadMass.set(m, new Map());
       statMass.set(m, new Map(NON_HP_STATS.map((s) => [s, new Map<number, number>()])));
     }
     let totalMass = 0;
-    let leaves = 0;
     const assignment = new Map<string, Record<NonHpStat, number>>();
 
     const dfs = (i: number, weight: number): void => {
       if (weight === 0) return;
       if (i === component.length) {
-        let w = weight;
-        for (const h of hits) {
-          const off = assignment.get(h.attackerId)![h.offStat];
-          const def = assignment.get(h.defenderId)![h.defStat];
-          w *= h.weights.get(`${off},${def}`) ?? 0;
-          if (w === 0) return;
-        }
-        for (const s of speeds) {
-          if (!s.allowed.has(`${assignment.get(s.firstId)!.spe},${assignment.get(s.secondId)!.spe}`)) return;
-        }
-        leaves++;
+        const w = jointWeight(assignment, hits, speeds, weight);
+        if (w === 0) return;
         totalMass += w;
-        for (const m of component) {
-          const spread = assignment.get(m)!;
-          const key = NON_HP_STATS.map((s) => spread[s]).join('/');
-          const sm = monSpreadMass.get(m)!;
-          sm.set(key, (sm.get(key) ?? 0) + w);
-          const stm = statMass.get(m)!;
-          for (const s of NON_HP_STATS) {
-            const map = stm.get(s)!;
-            map.set(spread[s], (map.get(spread[s]) ?? 0) + w);
-          }
-        }
+        record(component, assignment, w, monSpreadMass, statMass);
         return;
       }
       const monId = component[i]!;
@@ -553,18 +573,90 @@ export class ConstraintSystem {
     };
     dfs(0, 1);
 
-    if (totalMass === 0 || leaves === 0) {
-      // Feasible per Phase A but no joint support (rare numeric corner) — degrade.
-      for (const m of component) {
-        const r = reports.get(m)!;
-        r.note = 'no weighted joint support; showing Phase-A feasible ranges';
-        r.perStat = phaseAStatReports(m, phaseA, this.spHp.get(m)!, this.touched.get(m)!);
-      }
+    if (totalMass === 0) {
+      this.degradeComponent(component, phaseA, reports, 'no weighted joint support');
+      return true;
+    }
+    this.writeComponentReports(component, monSpreadMass, statMass, totalMass, phaseA, maxCandidates, reports, 'exact');
+    return true;
+  }
+
+  /**
+   * Gibbs sampling over a too-large component (Constraint Model §10 fallback).
+   * Moves reallocate SP between a pair of stats within a mon (sum preserved →
+   * budget always respected), drawn from the exact local conditional, so the
+   * chain targets the same posterior the exact path computes.
+   */
+  private sampleComponent(
+    component: string[],
+    phaseA: PhaseAResult,
+    prior: SpreadPrior,
+    maxCandidates: number,
+    cfg: SampleConfig,
+    reports: Map<string, MonReport>,
+  ): void {
+    const rng = mulberry32(cfg.seed);
+    const hits = this.componentHits(component);
+    const speeds = this.componentSpeeds(component);
+    const domSets = new Map<string, Record<NonHpStat, Set<number>>>();
+    const targets = new Map<string, number>();
+    for (const monId of component) {
+      const arr = this.domainArrays(monId, phaseA);
+      domSets.set(monId, Object.fromEntries(NON_HP_STATS.map((s) => [s, new Set(arr[s])])) as Record<NonHpStat, Set<number>>);
+      targets.set(monId, SP_BUDGET - this.spHp.get(monId)!);
+    }
+
+    const state = findFeasibleInit(component, domSets, targets, hits, speeds, rng, cfg.initTries);
+    if (!state) {
+      this.degradeComponent(component, phaseA, reports, 'could not find a feasible starting point to sample');
       return;
     }
 
+    const monSpreadMass = new Map<string, Map<string, number>>();
+    const statMass = new Map<string, Map<NonHpStat, Map<number, number>>>();
+    for (const m of component) {
+      monSpreadMass.set(m, new Map());
+      statMass.set(m, new Map(NON_HP_STATS.map((s) => [s, new Map<number, number>()])));
+    }
+    let samples = 0;
+    for (let iter = 0; iter < cfg.iterations; iter++) {
+      gibbsSweep(state, component, domSets, prior, this.spHp, hits, speeds, rng);
+      if (iter >= cfg.burnIn && (iter - cfg.burnIn) % cfg.thin === 0) {
+        samples++;
+        record(component, state, 1, monSpreadMass, statMass);
+      }
+    }
+    this.writeComponentReports(component, monSpreadMass, statMass, samples, phaseA, maxCandidates, reports, 'sampled');
+  }
+
+  /** Honest fallback: report the Phase-A feasible ranges as uniform distributions. */
+  private degradeComponent(
+    component: string[],
+    phaseA: PhaseAResult,
+    reports: Map<string, MonReport>,
+    reason = 'feasible space too large to weight exactly',
+  ): void {
+    for (const m of component) {
+      const r = reports.get(m)!;
+      r.method = 'phaseA-ranges';
+      r.note = `${reason}; showing Phase-A feasible ranges`;
+      r.perStat = phaseAStatReports(m, phaseA, this.spHp.get(m)!, this.touched.get(m)!);
+    }
+  }
+
+  private writeComponentReports(
+    component: string[],
+    monSpreadMass: Map<string, Map<string, number>>,
+    statMass: Map<string, Map<NonHpStat, Map<number, number>>>,
+    totalMass: number,
+    phaseA: PhaseAResult,
+    maxCandidates: number,
+    reports: Map<string, MonReport>,
+    method: SolveMethod,
+  ): void {
     for (const monId of component) {
       const report = reports.get(monId)!;
+      report.method = method;
       report.perStat = buildStatReports(
         monId,
         statMass.get(monId)!,
@@ -574,10 +666,7 @@ export class ConstraintSystem {
         this.touched.get(monId)!,
       );
       const ranked = [...monSpreadMass.get(monId)!.entries()]
-        .map(([key, mass]) => ({
-          spread: spreadFromKey(key),
-          confidence: mass / totalMass,
-        }))
+        .map(([key, mass]) => ({ spread: spreadFromKey(key), confidence: mass / totalMass }))
         .sort((a, b) => b.confidence - a.confidence);
       report.candidates = ranked.slice(0, maxCandidates);
       if (ranked[0]) report.headline = ranked[0];
@@ -590,6 +679,173 @@ const spreadFromKey = (key: string): Record<NonHpStat, number> => {
   const parts = key.split('/').map(Number);
   return { atk: parts[0]!, def: parts[1]!, spa: parts[2]!, spd: parts[3]!, spe: parts[4]! };
 };
+
+type Assignment = Map<string, Record<NonHpStat, number>>;
+
+/** Hard/likelihood weight of a full joint assignment (0 if any factor forbids it). */
+function jointWeight(assignment: Assignment, hits: HitFactor[], speeds: SpeedRelation[], base = 1): number {
+  let w = base;
+  for (const h of hits) {
+    const off = assignment.get(h.attackerId)![h.offStat];
+    const def = assignment.get(h.defenderId)![h.defStat];
+    w *= h.weights.get(`${off},${def}`) ?? 0;
+    if (w === 0) return 0;
+  }
+  for (const s of speeds) {
+    if (!s.allowed.has(`${assignment.get(s.firstId)!.spe},${assignment.get(s.secondId)!.spe}`)) return 0;
+  }
+  return w;
+}
+
+/** Accumulate one weighted joint assignment into the per-mon and per-stat mass maps. */
+function record(
+  component: string[],
+  assignment: Assignment,
+  w: number,
+  monSpreadMass: Map<string, Map<string, number>>,
+  statMass: Map<string, Map<NonHpStat, Map<number, number>>>,
+): void {
+  for (const m of component) {
+    const spread = assignment.get(m)!;
+    const key = NON_HP_STATS.map((s) => spread[s]).join('/');
+    const sm = monSpreadMass.get(m)!;
+    sm.set(key, (sm.get(key) ?? 0) + w);
+    const stm = statMass.get(m)!;
+    for (const s of NON_HP_STATS) {
+      const map = stm.get(s)!;
+      map.set(spread[s], (map.get(spread[s]) ?? 0) + w);
+    }
+  }
+}
+
+/** Deterministic, seedable PRNG (mulberry32) — reproducible sampling for tests. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function shuffle<T>(arr: readonly T[], rng: () => number): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j]!, a[i]!];
+  }
+  return a;
+}
+
+/** A random spread within `doms` summing to `target` (suffix bounds keep it feasible); null if none. */
+function randomComposition(
+  doms: Record<NonHpStat, Set<number>>,
+  target: number,
+  rng: () => number,
+): Record<NonHpStat, number> | null {
+  const order = shuffle(NON_HP_STATS, rng);
+  const arrs = order.map((s) => [...doms[s]].sort((a, b) => a - b));
+  const n = order.length;
+  const sufMin = new Array<number>(n + 1).fill(0);
+  const sufMax = new Array<number>(n + 1).fill(0);
+  for (let i = n - 1; i >= 0; i--) {
+    const a = arrs[i]!;
+    sufMin[i] = sufMin[i + 1]! + (a.length ? a[0]! : Infinity);
+    sufMax[i] = sufMax[i + 1]! + (a.length ? a[a.length - 1]! : -Infinity);
+  }
+  const out: Record<string, number> = {};
+  let remaining = target;
+  for (let i = 0; i < n; i++) {
+    const feasible = arrs[i]!.filter((v) => {
+      const rem = remaining - v;
+      return rem >= sufMin[i + 1]! && rem <= sufMax[i + 1]!;
+    });
+    if (feasible.length === 0) return null;
+    const v = feasible[Math.floor(rng() * feasible.length)]!;
+    out[order[i]!] = v;
+    remaining -= v;
+  }
+  return out as Record<NonHpStat, number>;
+}
+
+function findFeasibleInit(
+  component: string[],
+  domSets: Map<string, Record<NonHpStat, Set<number>>>,
+  targets: Map<string, number>,
+  hits: HitFactor[],
+  speeds: SpeedRelation[],
+  rng: () => number,
+  tries: number,
+): Assignment | null {
+  for (let t = 0; t < tries; t++) {
+    const state: Assignment = new Map();
+    let ok = true;
+    for (const m of component) {
+      const comp = randomComposition(domSets.get(m)!, targets.get(m)!, rng);
+      if (!comp) {
+        ok = false;
+        break;
+      }
+      state.set(m, comp);
+    }
+    if (ok && jointWeight(state, hits, speeds, 1) > 0) return state;
+  }
+  return null;
+}
+
+/**
+ * One Gibbs sweep: for every mon and every stat pair, reallocate SP between the
+ * two (sum fixed → budget preserved), drawn from the exact local conditional.
+ */
+function gibbsSweep(
+  state: Assignment,
+  component: string[],
+  domSets: Map<string, Record<NonHpStat, Set<number>>>,
+  prior: SpreadPrior,
+  spHpMap: Map<string, number>,
+  hits: HitFactor[],
+  speeds: SpeedRelation[],
+  rng: () => number,
+): void {
+  for (const monId of component) {
+    const doms = domSets.get(monId)!;
+    const spHp = spHpMap.get(monId)!;
+    for (let a = 0; a < NON_HP_STATS.length; a++) {
+      for (let b = a + 1; b < NON_HP_STATS.length; b++) {
+        const si = NON_HP_STATS[a]!;
+        const sj = NON_HP_STATS[b]!;
+        const original = state.get(monId)!;
+        const sum = original[si] + original[sj];
+        const candidates: Array<{ ti: number; tj: number; w: number }> = [];
+        let totalW = 0;
+        for (const ti of doms[si]) {
+          const tj = sum - ti;
+          if (tj < 0 || !doms[sj].has(tj)) continue;
+          const trial = { ...original, [si]: ti, [sj]: tj } as Record<NonHpStat, number>;
+          state.set(monId, trial);
+          const w = prior.weight(trial, spHp) * jointWeight(state, hits, speeds, 1);
+          state.set(monId, original);
+          if (w > 0) {
+            candidates.push({ ti, tj, w });
+            totalW += w;
+          }
+        }
+        if (totalW <= 0 || candidates.length === 0) continue; // no valid move; keep current
+        let r = rng() * totalW;
+        let chosen = candidates[candidates.length - 1]!;
+        for (const c of candidates) {
+          r -= c.w;
+          if (r <= 0) {
+            chosen = c;
+            break;
+          }
+        }
+        state.set(monId, { ...original, [si]: chosen.ti, [sj]: chosen.tj } as Record<NonHpStat, number>);
+      }
+    }
+  }
+}
 
 /** Enumerate every spread whose stats lie in `doms` and sum to `target`; null if > cap. */
 function enumerateSpreads(
