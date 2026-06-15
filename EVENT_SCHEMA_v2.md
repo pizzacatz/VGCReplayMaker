@@ -61,6 +61,7 @@ The event types that **change battle state** are what make reconstruction work. 
 | `hp_before` / `hp_after` | Exact integers | yes | `175 → 131` |
 | `crit` | Critical hit? (cannot be derived — it's random) | yes | `false` |
 | `status` | `clean` \| `composite` \| `unresolved` (§5) | yes | `clean` |
+| `hits` | **▲** Observed sub-hit count for a multi-hit move (the HP delta is the summed total; the solver models it as a convolution — Constraint §11) | no | `3` |
 | `observed_effectiveness` | What the screen showed (cross-check vs derived types) | yes | `1x` |
 | `applied_effects` | **▲** Optional: hit-specific consumables the user *saw* fire whose timing is ambiguous (e.g. a resist berry popping to reduce this hit) | no | `["Occa Berry consumed"]` |
 | `note` | Caveats / why composite | conditional | — |
@@ -89,7 +90,7 @@ Everything else (boosts, screens, terrain, weather, attacker burn, ally abilitie
 | `side` | Side-scoped effects (screens, Tailwind) | conditional | `A` |
 | `turns_known` | Duration if known | no | `5` |
 
-### 4.11 `item_or_ability_event` — unchanged in shape (`mon`, `kind`, `name`, `effect`). Covers item consumption (berries, Sash), on-entry abilities (Intimidate, weather setters), and any conditional activation. Reconstruction reads these to know an item is gone or an effect fired.
+### 4.11 `item_or_ability_event` — shape (`mon`, `kind`, `name`, `effect`). Covers item consumption (berries, Sash), on-entry abilities (Intimidate, weather setters), and any conditional activation. Reconstruction reads these to know an item is gone or an effect fired. **▲** `kind: 'paradox'` records a Protosynthesis/Quark Drive boost with `name` = the announced stat (`atk`/`spa`/`spe`/…); reconstruction applies ×1.3 (×1.5 Speed) to that mon's hits until it switches out.
 
 ### 4.12 `random_outcome` — unchanged (`mon`, `event_kind`, `outcome`, `linked_event`). The luck record.
 

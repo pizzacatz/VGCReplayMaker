@@ -10,7 +10,9 @@ One event log, read two ways: the **solver** consumes only `clean` damage events
 
 ## Status
 
-Implemented end-to-end. The full pipeline — pokepaste import, transcription, the reverse-engineering solver (with honest tagging), aggregation across games, and replay — is built and tested (`npm test`, 156 tests). A web UI ties it together, organized as **Tournament → Match (a best-of set) → Game**: teams are registered once per tournament and reused every game (team-lock), each game owns its event log, and the **match winner is derived from the games' results** (first to ⌈bestOf/2⌉). The Solve tab aggregates every game of a player into one spread estimate.
+Implemented end-to-end. The full pipeline — pokepaste import, transcription, the reverse-engineering solver (with honest tagging), aggregation across games, and replay — is built and tested (`npm test`, 197 tests). A web UI ties it together, organized as **Tournament → Match (a best-of set) → Game**: teams are registered once per tournament and reused every game (team-lock), each game owns its event log, and the **match winner is derived from the games' results** (first to ⌈bestOf/2⌉). The Solve tab aggregates every game of a player into one spread estimate.
+
+The damage factor is computed against the full modifier context reconstructed from the timeline — weather/terrain/screens, boosts, burn, Helping Hand, **Paradox boosts** (Protosynthesis/Quark Drive), **Mega** formes, Multiscale, single-target spread — and the solver models **multi-hit** moves (convolution) and **speed control** (Tailwind/paralysis/Choice Scarf). Transparency tools: an evidence drill-down (exactly which hits derive each stat), per-game / per-hit exclusion, and contradiction pinpointing. Imports a **Showdown replay** straight into the event log.
 
 ## Running the app
 
