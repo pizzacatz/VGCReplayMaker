@@ -96,7 +96,28 @@ export interface StatReport {
 
 export interface SpreadCandidate {
   spread: Record<NonHpStat, number>;
+  /** raw posterior mass (kept exact for coherence/sorting) */
   confidence: number;
+  /** confidence rounded to the nearest 5% for honest display (resolved decision, Output Contract §14) */
+  confidencePct: number;
+}
+
+/** Provenance: how much evidence informed this mon's result (Output Contract §7). */
+export interface EvidenceSummary {
+  /** clean hits this mon TOOK (constrain its defenses) */
+  cleanHitsIn: number;
+  /** clean hits this mon DEALT (constrain its offenses) */
+  cleanHitsOut: number;
+  /** same-bracket move-order facts touching this mon's Speed */
+  speedFacts: number;
+}
+
+/** A loose stat plus what footage would tighten it (Output Contract §8). */
+export interface MissingNote {
+  stat: NonHpStat;
+  tag: StatTag;
+  reason: string;
+  resolve: string;
 }
 
 /** How a mon's posterior was computed (Constraint Model §10 — recorded for transparency). */
@@ -111,6 +132,12 @@ export interface MonReport {
   candidates: SpreadCandidate[];
   /** posterior mass not covered by the listed candidates */
   remainingMass: number;
+  /** remainingMass rounded to the nearest 5% for display */
+  remainingMassPct: number;
+  /** provenance — how much evidence informed this result */
+  evidence: EvidenceSummary;
+  /** missing-evidence notes for every loose (guessed/bounded) stat */
+  missing: MissingNote[];
   /** which method produced this posterior */
   method?: SolveMethod;
   /** set when this mon's clean constraints are unsatisfiable (no force-fit) */
@@ -458,6 +485,9 @@ export class ConstraintSystem {
         perStat: [],
         candidates: [],
         remainingMass: 1,
+        remainingMassPct: 100,
+        evidence: this.computeEvidence(monId),
+        missing: [],
         ...(empty
           ? { contradiction: phaseA.contradictions.find((c) => c.includes(monId)) ?? 'no feasible spread' }
           : {}),
@@ -512,6 +542,14 @@ export class ConstraintSystem {
       (groups.get(root) ?? groups.set(root, []).get(root)!).push(id);
     }
     return [...groups.values()];
+  }
+
+  private computeEvidence(monId: string): EvidenceSummary {
+    return {
+      cleanHitsIn: this.hitFactors.filter((f) => f.defenderId === monId).length,
+      cleanHitsOut: this.hitFactors.filter((f) => f.attackerId === monId).length,
+      speedFacts: this.speedRelations.filter((s) => s.firstId === monId || s.secondId === monId).length,
+    };
   }
 
   private componentHits(component: string[]): HitFactor[] {
@@ -666,11 +704,15 @@ export class ConstraintSystem {
         this.touched.get(monId)!,
       );
       const ranked = [...monSpreadMass.get(monId)!.entries()]
-        .map(([key, mass]) => ({ spread: spreadFromKey(key), confidence: mass / totalMass }))
+        .map(([key, mass]) => {
+          const confidence = mass / totalMass;
+          return { spread: spreadFromKey(key), confidence, confidencePct: pct5(confidence) };
+        })
         .sort((a, b) => b.confidence - a.confidence);
       report.candidates = ranked.slice(0, maxCandidates);
       if (ranked[0]) report.headline = ranked[0];
       report.remainingMass = 1 - report.candidates.reduce((acc, c) => acc + c.confidence, 0);
+      report.remainingMassPct = pct5(report.remainingMass);
     }
   }
 }
@@ -941,10 +983,93 @@ function phaseAStatReports(
   return reports;
 }
 
-/** Ensure a contradicted/empty report still has a minimal HP read entry. */
+/** Round a probability (0..1) to the nearest 5% for honest display. */
+function pct5(p: number): number {
+  return Math.round((p * 100) / 5) * 5;
+}
+
+const STAT_LABEL: Record<NonHpStat, string> = {
+  atk: 'physical attack',
+  def: 'physical bulk',
+  spa: 'special attack',
+  spd: 'special bulk',
+  spe: 'Speed',
+};
+
+/** Missing-evidence note for one loose stat: why it is loose and what footage resolves it. */
+function noteFor(stat: NonHpStat, tag: StatTag): MissingNote {
+  const offensive = stat === 'atk' || stat === 'spa';
+  const defensive = stat === 'def' || stat === 'spd';
+  const physical = stat === 'atk' || stat === 'def';
+  const kind = physical ? 'physical' : 'special';
+  if (stat === 'spe') {
+    return tag === 'guessed'
+      ? { stat, tag, reason: 'no turn-order evidence pins this mon’s Speed.', resolve: 'log a move-order vs a known-Speed mon in the same priority bracket.' }
+      : { stat, tag, reason: 'bracketed by turn order but not pinned.', resolve: 'log a speed tie, or an order against a known Speed at the boundary.' };
+  }
+  if (tag === 'guessed') {
+    return offensive
+      ? { stat, tag, reason: `never seen dealing a ${kind} hit, so ${STAT_LABEL[stat]} is unconstrained.`, resolve: `log one clean ${kind} hit it deals.` }
+      : { stat, tag, reason: `never seen taking a ${kind} hit, so ${STAT_LABEL[stat]} is unconstrained.`, resolve: `log one clean ${kind} hit it takes.` };
+  }
+  // bounded
+  return offensive || defensive
+    ? { stat, tag, reason: `${STAT_LABEL[stat]} is observed but coupled to a single matchup.`, resolve: `log a ${kind} hit ${offensive ? 'it deals against a different defender' : 'from a different attacker'}.` }
+    : { stat, tag, reason: `${STAT_LABEL[stat]} narrowed but not pinned.`, resolve: 'log a more diverse matchup touching it.' };
+}
+
+function missingNotes(perStat: StatReport[]): MissingNote[] {
+  const notes: MissingNote[] = [];
+  for (const r of perStat) {
+    if (r.stat === 'hp') continue;
+    if (r.tag === 'guessed' || r.tag === 'bounded') notes.push(noteFor(r.stat, r.tag));
+  }
+  return notes;
+}
+
+/** Finalize a report: minimal HP entry if empty, plus missing-evidence notes. */
 function finalizeReport(report: MonReport, spHp: number): MonReport {
   if (report.perStat.length === 0) {
     report.perStat = [{ stat: 'hp', tag: 'read', best: spHp, distribution: [{ sp: spHp, p: 1 }] }];
   }
+  report.missing = missingNotes(report.perStat);
   return report;
+}
+
+/** Render a mon report as the human-readable Output Contract §11 block. */
+export function formatMonReport(report: MonReport): string {
+  const lines: string[] = [];
+  lines.push(`${report.monId}  ${report.species}`);
+  if (report.contradiction) {
+    lines.push(`  FLAG: ${report.contradiction}`);
+    return lines.join('\n');
+  }
+  if (report.headline) {
+    const h = report.headline.spread;
+    lines.push(
+      `  HEADLINE  HP ${report.spHp} · Atk ${h.atk} · Def ${h.def} · SpA ${h.spa} · SpD ${h.spd} · Spe ${h.spe}` +
+        `   (${report.headline.confidencePct}%${report.method === 'sampled' ? ', sampled' : ''})`,
+    );
+  }
+  lines.push('  PER-STAT:');
+  for (const r of report.perStat) {
+    const range = r.range && r.tag === 'bounded' ? `  range ${r.range[0]}–${r.range[1]}` : '';
+    lines.push(`    ${r.stat.toUpperCase().padEnd(3)} ${String(r.best).padStart(2)} SP   [${r.tag}]${range}`);
+  }
+  lines.push(
+    `  EVIDENCE: ${report.evidence.cleanHitsIn} clean hits taken · ${report.evidence.cleanHitsOut} dealt · ${report.evidence.speedFacts} speed facts`,
+  );
+  if (report.candidates.length > 0) {
+    lines.push('  CANDIDATES:');
+    report.candidates.forEach((c, i) => {
+      const s = c.spread;
+      lines.push(`    ${i + 1}  ${s.atk}/${s.def}/${s.spa}/${s.spd}/${s.spe}   ${c.confidencePct}%`);
+    });
+    lines.push(`    remaining mass: ${report.remainingMassPct}%`);
+  }
+  if (report.missing.length > 0) {
+    lines.push('  MISSING:');
+    for (const m of report.missing) lines.push(`    ${m.stat.toUpperCase()}  ${m.reason} Resolve: ${m.resolve}`);
+  }
+  return lines.join('\n');
 }
