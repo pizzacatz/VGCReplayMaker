@@ -5,12 +5,17 @@ import {
   activeMonIds,
   benchMons,
   currentBoard,
+  endOfTurnEvents,
   entryEffectEvents,
+  estimateDamage,
   megaFormeAbility,
   megaFormeFromItem,
   monAbility,
+  monItem,
   monLabel,
+  monMaxHp,
   moveCanFlinch,
+  moveMakesContact,
   moveRecoilDrain,
   nextEventId,
   planTargets,
@@ -113,13 +118,25 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
 
   const plan = move && actor ? planTargets(move, actor, board) : null;
 
+  // pre-fill HP-after from a calc estimate (blocked targets stay no-damage)
+  const initialOutcome = (t: string, m: string, isDamaging: boolean): TargetOutcome => {
+    const blocked = !!protectionBlocking(ws, t, m, currentTurn);
+    let hpAfter = '';
+    if (!blocked && isDamaging && actor) {
+      const slot = slotOfMon(board, t);
+      const before = slot ? board.slots[slot]!.hp : 0;
+      const est = estimateDamage(ws, board, actor, t, m, false);
+      if (est) hpAfter = String(Math.max(0, before - est.avg));
+    }
+    return { ...blankOutcome(), missed: blocked, hpAfter };
+  };
+
   const pickMove = (m: string) => {
     setMove(m);
     const p = planTargets(m, actor!, board);
     const ts = p.spread ? p.candidates : p.candidates.slice(0, 1);
     setTargets(ts);
-    // auto-mark targets blocked by Protect / Wide Guard / Quick Guard this turn
-    setOutcomes(Object.fromEntries(ts.map((t) => [t, { ...blankOutcome(), missed: !!protectionBlocking(ws, t, m, currentTurn) }])));
+    setOutcomes(Object.fromEntries(ts.map((t) => [t, initialOutcome(t, m, p.isDamaging)])));
   };
 
   const setOutcome = (t: string, patch: Partial<TargetOutcome>) =>
@@ -132,7 +149,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
       setTargets([]);
     } else {
       setTargets([t]);
-      setOutcomes({ [t]: outcomes[t] ?? { ...blankOutcome(), missed: !!(move && protectionBlocking(ws, t, move, currentTurn)) } });
+      setOutcomes({ [t]: outcomes[t] ?? (move ? initialOutcome(t, move, plan?.isDamaging ?? true) : blankOutcome()) });
     }
   };
 
@@ -165,46 +182,58 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
       (seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'move_used', user: actor, move, targets, isSpread: plan?.spread ?? false }),
     ];
     if (plan?.isDamaging) {
+      const contact = moveMakesContact(move);
+      const aMax = monMaxHp(ws, actor);
+      let totalDamage = 0;
+      let contactLoss = 0;
       for (const t of targets) {
         const o = outcomes[t] ?? blankOutcome();
         if (o.missed) {
           builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'miss', outcome: 'yes' }));
           continue;
         }
-        // KO forces HP to 0; otherwise require an entered HP.
         const after = o.ko ? 0 : o.hpAfter === '' ? null : Number(o.hpAfter);
         if (after === null) continue;
         const slot = slotOfMon(board, t);
         const before = slot ? board.slots[slot]!.hp : 0;
+        const dmg = before - after;
+        totalDamage += dmg;
         const eff = effOf(t)?.label ?? '1x'; // derived from the type chart, not entered
         builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit: o.crit, status: o.status, observedEffectiveness: eff }));
-        if (o.ko) {
-          builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target: t }));
+        if (o.ko) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target: t }));
+        if (canFlinch && o.flinch) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'flinch', outcome: 'yes' }));
+        // Sitrus Berry: heals the defender at ≤50% HP (alive)
+        const dMax = monMaxHp(ws, t);
+        if (!o.ko && after > 0 && dMax && monItem(ws, t) === 'Sitrus Berry' && after <= Math.floor(dMax / 2)) {
+          const healed = Math.min(dMax, after + Math.floor(dMax / 4));
+          builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: t, kind: 'enditem', name: 'Sitrus Berry' }));
+          builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'heal', target: t, source: 'Sitrus Berry', hpBefore: after, hpAfter: healed }));
         }
-        if (canFlinch && o.flinch) {
-          builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'flinch', outcome: 'yes' }));
+        // Contact: Rocky Helmet / Rough Skin / Iron Barbs chip the attacker
+        if (contact && dmg > 0 && aMax) {
+          if (monItem(ws, t) === 'Rocky Helmet') contactLoss += Math.floor(aMax / 6);
+          const dAbility = monAbility(ws, t);
+          if (dAbility === 'Rough Skin' || dAbility === 'Iron Barbs') contactLoss += Math.floor(aMax / 8);
         }
       }
-      // recoil / drain auto-derived from the total damage dealt (attacker adjusts HP if needed)
-      const totalDamage = targets.reduce((sum, t) => {
-        const o = outcomes[t] ?? blankOutcome();
-        if (o.missed) return sum;
-        const slot = slotOfMon(board, t);
-        const before = slot ? board.slots[slot]!.hp : 0;
-        const after = o.ko ? 0 : o.hpAfter === '' ? null : Number(o.hpAfter);
-        return after === null ? sum : sum + (before - after);
-      }, 0);
+      // Attacker residuals, chained: contact → Life Orb → recoil (losses), drain (gain)
       const rd = moveRecoilDrain(move);
+      const lifeOrb = monItem(ws, actor) === 'Life Orb' && totalDamage > 0 && aMax ? Math.floor(aMax / 10) : 0;
+      const recoil = rd.recoil && totalDamage > 0 ? Math.floor((totalDamage * rd.recoil[0]) / rd.recoil[1]) : 0;
+      const drain = rd.drain && totalDamage > 0 ? Math.floor((totalDamage * rd.drain[0]) / rd.drain[1]) : 0;
+      const residuals: Array<{ source: string; delta: number; kind: 'passive_hp_change' | 'heal' }> = [];
+      if (contactLoss > 0) residuals.push({ source: 'Contact', delta: -contactLoss, kind: 'passive_hp_change' });
+      if (lifeOrb > 0) residuals.push({ source: 'Life Orb', delta: -lifeOrb, kind: 'passive_hp_change' });
+      if (recoil > 0) residuals.push({ source: 'Recoil', delta: -recoil, kind: 'passive_hp_change' });
+      if (drain > 0) residuals.push({ source: 'Drain', delta: drain, kind: 'heal' });
       const aSlot = slotOfMon(board, actor);
-      const aHp = aSlot ? board.slots[aSlot]!.hp : 0;
-      if (rd.recoil && totalDamage > 0) {
-        const amt = Math.floor((totalDamage * rd.recoil[0]) / rd.recoil[1]);
-        const after = Math.max(0, aHp - amt);
-        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'passive_hp_change', target: actor, source: 'Recoil', hpBefore: aHp, hpAfter: after }));
-      }
-      if (rd.drain && totalDamage > 0) {
-        const amt = Math.floor((totalDamage * rd.drain[0]) / rd.drain[1]);
-        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'heal', target: actor, source: 'Drain', hpBefore: aHp, hpAfter: aHp + amt }));
+      let aHp = aSlot ? board.slots[aSlot]!.hp : 0;
+      const cap = aMax || aHp + 9999;
+      for (const r of residuals) {
+        const hpBefore = aHp;
+        aHp = Math.max(0, Math.min(cap, aHp + r.delta));
+        const target = actor;
+        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: r.kind, target, source: r.source, hpBefore, hpAfter: aHp }));
       }
     }
     emit(builders);
@@ -243,9 +272,12 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
           {ws.events.length === 0 ? (
             <button className="primary" onClick={startMatch}>▶ Start match (applies lead abilities)</button>
           ) : (
-            <button onClick={newTurn}>▶ New turn</button>
+            <>
+              <button onClick={() => emit(endOfTurnEvents(ws, board))}>⤓ End of turn (residuals)</button>
+              <button onClick={newTurn}>▶ New turn</button>
+            </>
           )}
-          <span className="muted">Click the acting Pokémon, then its move — recoil, Intimidate &amp; weather auto-fill.</span>
+          <span className="muted">Damage, recoil, Intimidate, weather, items auto-fill — adjust HP to the screen.</span>
         </div>
 
         <Board actives={actives} actor={actor} onPick={pickActor} youName={ws.sideA.player} oppName={ws.sideB.player} />
@@ -315,7 +347,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                           <>
                             <span className="muted">{before} →</span>
                             <input type="number" placeholder="hp after" value={o.ko ? 0 : o.hpAfter} disabled={o.ko} onChange={(e) => setOutcome(t, { hpAfter: e.target.value })} style={{ width: 90 }} />
-                            <span className="muted">{o.ko ? `= ${before} dmg (KO)` : o.hpAfter !== '' ? `= ${before - Number(o.hpAfter)} dmg` : ''}</span>
+                            <span className="muted">{o.ko ? `= ${before} dmg (KO)` : o.hpAfter !== '' ? `= ${before - Number(o.hpAfter)} dmg (est — adjust)` : ''}</span>
                             <label className="chip" style={{ color: o.ko ? 'var(--bad)' : undefined }}><input type="checkbox" checked={o.ko} onChange={(e) => setOutcome(t, { ko: e.target.checked })} /> KO</label>
                             <label className="chip"><input type="checkbox" checked={o.crit} onChange={(e) => setOutcome(t, { crit: e.target.checked })} /> crit</label>
                             {canFlinch && <label className="chip"><input type="checkbox" checked={o.flinch} onChange={(e) => setOutcome(t, { flinch: e.target.checked })} /> flinched</label>}

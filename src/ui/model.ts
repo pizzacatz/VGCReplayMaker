@@ -3,9 +3,10 @@
  * calls these helpers, which reuse the tested src/ modules (no logic here).
  */
 
-import { toID } from '@smogon/calc';
+import { toID, Pokemon as CalcPokemon, Move as CalcMove, Field as CalcField, Side as CalcSide, calculate } from '@smogon/calc';
 import { Dex } from '@pkmn/dex';
-import { championsGen, type MonSpec } from '../engine';
+import { championsGen, natureFor, type MonSpec } from '../engine';
+import type { SpSpread } from '../conversion';
 import { ConstraintSystem, type SolveResult } from '../solver';
 import { parsePokepaste, type ParsedMon } from '../import';
 import { extractCleanHits, extractSpeedFacts } from '../integration';
@@ -407,6 +408,109 @@ export function entryEffectEvents(ws: Workspace, monId: string, ability: string 
   if (weather) out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'field_change', field: weather, action: 'set' }));
   const terrain = TERRAIN_ABILITIES[ability];
   if (terrain) out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'field_change', field: terrain, action: 'set' }));
+  return out;
+}
+
+export function monItem(ws: Workspace, monId: string): string | undefined {
+  return allMons(ws).find((m) => m.monId === monId)?.parsed.item;
+}
+export function monMaxHp(ws: Workspace, monId: string): number {
+  return allMons(ws).find((m) => m.monId === monId)?.observedMaxHp ?? 0;
+}
+export function moveMakesContact(move: string): boolean {
+  try {
+    return !!(Dex.moves.get(move) as { flags?: { contact?: number } }).flags?.contact;
+  } catch {
+    return false;
+  }
+}
+function speciesTypes(species: string): string[] {
+  try {
+    return [...Dex.species.get(species).types];
+  } catch {
+    return [];
+  }
+}
+
+const WEATHER_CALC: Record<string, string> = { Sun: 'Sun', Rain: 'Rain', Sand: 'Sand', Snow: 'Snow', Hail: 'Hail' };
+const TERRAIN_CALC: Record<string, string> = { 'Grassy Terrain': 'Grassy', 'Electric Terrain': 'Electric', 'Psychic Terrain': 'Psychic', 'Misty Terrain': 'Misty' };
+
+function evsFromSpread(s?: SpSpread): Record<string, number> | undefined {
+  return s ? { hp: s.hp * 8, atk: s.atk * 8, def: s.def * 8, spa: s.spa * 8, spd: s.spd * 8, spe: s.spe * 8 } : undefined;
+}
+
+/**
+ * Estimate a move's damage with @smogon/calc, applying the reconstructed field
+ * (weather/terrain/screens) and current boosts/burn — to PRE-FILL HP-after. Uses
+ * each mon's known spread if present, else neutral defaults. It's a starting
+ * estimate (especially for unknown opponents); the transcriber corrects it.
+ */
+export function estimateDamage(ws: Workspace, board: ReplayState, attackerId: string, defenderId: string, move: string, crit: boolean): { min: number; max: number; avg: number } | null {
+  try {
+    const gen = championsGen();
+    const aEntry = allMons(ws).find((m) => m.monId === attackerId);
+    const dEntry = allMons(ws).find((m) => m.monId === defenderId);
+    if (!aEntry || !dEntry) return null;
+    const aSpec = toSpec(aEntry.parsed);
+    const dSpec = toSpec(dEntry.parsed);
+    const aEvs = evsFromSpread(aEntry.parsed.spSpread);
+    const dEvs = evsFromSpread(dEntry.parsed.spSpread);
+    const attacker = new CalcPokemon(gen, board.slots[slotOfMon(board, attackerId) ?? '']?.species ?? aSpec.species, {
+      level: 50, nature: natureFor(aSpec.alignment),
+      ...(aEvs ? { evs: aEvs } : {}), ...(aSpec.item ? { item: aSpec.item } : {}), ...(aSpec.ability ? { ability: aSpec.ability } : {}),
+      ...(board.boosts[attackerId] ? { boosts: board.boosts[attackerId] } : {}),
+      ...(board.status[attackerId] === 'brn' ? { status: 'brn' as const } : {}),
+    });
+    const defender = new CalcPokemon(gen, board.slots[slotOfMon(board, defenderId) ?? '']?.species ?? dSpec.species, {
+      level: 50, nature: natureFor(dSpec.alignment),
+      ...(dEvs ? { evs: dEvs } : {}), ...(dSpec.item ? { item: dSpec.item } : {}), ...(dSpec.ability ? { ability: dSpec.ability } : {}),
+      ...(board.boosts[defenderId] ? { boosts: board.boosts[defenderId] } : {}),
+    });
+    const m = new CalcMove(gen, move, crit ? { isCrit: true } : undefined);
+    const defSide = ws.sideA.mons.some((x) => x.monId === defenderId) ? 'A' : 'B';
+    const screens = board.sides[defSide];
+    const terrain = board.field.map((f) => TERRAIN_CALC[f]).find(Boolean);
+    const field = new CalcField({
+      gameType: 'Doubles',
+      ...(board.weather && WEATHER_CALC[board.weather] ? { weather: WEATHER_CALC[board.weather] as never } : {}),
+      ...(terrain ? { terrain: terrain as never } : {}),
+      defenderSide: new CalcSide({ isReflect: screens.includes('Reflect'), isLightScreen: screens.includes('Light Screen'), isAuroraVeil: screens.includes('Aurora Veil') }),
+    });
+    const dmg = calculate(gen, attacker, defender, m, field).damage;
+    const nums = (Array.isArray(dmg) ? dmg.flat(Infinity) : [dmg]).filter((n): n is number => typeof n === 'number');
+    if (nums.length === 0 || (nums.length === 1 && nums[0] === 0)) return nums.length ? { min: 0, max: 0, avg: 0 } : null;
+    return { min: nums[0]!, max: nums[nums.length - 1]!, avg: Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * End-of-turn residuals for all active mons: weather chip (Sandstorm),
+ * Leftovers/Black Sludge heal, and status damage (burn/poison). Returns event
+ * builders; the user adjusts HP if the screen differs.
+ */
+export function endOfTurnEvents(ws: Workspace, board: ReplayState): EventBuilder[] {
+  const out: EventBuilder[] = [];
+  for (const m of activeMonIds(board).filter((a) => !a.fainted)) {
+    let hp = m.hp;
+    const max = monMaxHp(ws, m.monId) || m.maxHp;
+    const types = speciesTypes(m.species);
+    const item = monItem(ws, m.monId);
+    const push = (source: string, delta: number, kind: 'passive_hp_change' | 'heal') => {
+      const before = hp;
+      hp = Math.max(0, Math.min(max, hp + delta));
+      const monId = m.monId;
+      out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: kind, target: monId, source, hpBefore: before, hpAfter: hp }) as MatchEvent);
+    };
+    if (board.weather === 'Sand' && !types.some((t) => ['Rock', 'Ground', 'Steel'].includes(t))) push('Sandstorm', -Math.floor(max / 16), 'passive_hp_change');
+    if (item === 'Leftovers') push('Leftovers', Math.floor(max / 16), 'heal');
+    else if (item === 'Black Sludge') push('Black Sludge', types.includes('Poison') ? Math.floor(max / 16) : -Math.floor(max / 8), types.includes('Poison') ? 'heal' : 'passive_hp_change');
+    const status = board.status[m.monId];
+    if (status === 'brn') push('Burn', -Math.floor(max / 16), 'passive_hp_change');
+    else if (status === 'psn') push('Poison', -Math.floor(max / 8), 'passive_hp_change');
+    else if (status === 'tox') push('Poison', -Math.floor(max / 8), 'passive_hp_change');
+  }
   return out;
 }
 

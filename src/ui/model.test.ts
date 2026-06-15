@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { MatchEvent, MatchLog } from '../log';
 import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { broughtInfo, buildLog, entryEffectEvents, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveRecoilDrain, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
+import { broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -153,6 +153,37 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
     const sun = entryEffectEvents(ws, 'A0', 'Drought', board, false).map((b, i) => b(i + 1, 1));
     expect(sun).toHaveLength(1);
     expect(sun[0]).toMatchObject({ type: 'field_change', field: 'Sun', action: 'set' });
+  });
+
+  it('moveMakesContact reads the dex flag', () => {
+    expect(moveMakesContact('Flare Blitz')).toBe(true);
+    expect(moveMakesContact('Earthquake')).toBe(false);
+  });
+
+  it('estimateDamage returns a positive average for a super-effective hit', () => {
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [],
+    };
+    const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const est = estimateDamage(ws, b, 'A0', 'B0', 'Flare Blitz', false);
+    expect(est).not.toBeNull();
+    expect(est!.avg).toBeGreaterThan(0);
+    expect(est!.min).toBeLessThanOrEqual(est!.max);
+  });
+
+  it('endOfTurnEvents: Sandstorm chips a non-immune mon, not a Ground type', () => {
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [{ eventId: 'w', seq: 1, turn: 1, type: 'field_change', field: 'Sand', action: 'set' }],
+    };
+    const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const sand = endOfTurnEvents(ws, b).map((bld, i) => bld(i + 1, 1)).filter((e) => e.type === 'passive_hp_change' && e.source === 'Sandstorm');
+    const targets = sand.map((e) => (e.type === 'passive_hp_change' ? e.target : ''));
+    expect(targets).toContain('A0'); // Incineroar (Fire/Dark) chipped
+    expect(targets).not.toContain('B0'); // Garchomp (Ground) immune
   });
 });
 

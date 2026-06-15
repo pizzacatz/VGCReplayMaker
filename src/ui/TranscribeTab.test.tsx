@@ -132,6 +132,14 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText(/→99/)).toBeTruthy(); // event log reflects the edit
   });
 
+  it('picking a damaging move pre-fills an estimated HP-after', () => {
+    const { getAllByText, getByText, getByPlaceholderText } = render(<Harness />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Flare Blitz'));
+    const input = getByPlaceholderText('hp after') as HTMLInputElement;
+    expect(input.value).not.toBe(''); // calc pre-fill present
+  });
+
   it('Flare Blitz auto-adds a recoil event', () => {
     const { getAllByText, getByText, getByPlaceholderText } = render(<Harness />);
     fireEvent.click(getAllByText('Incineroar').at(-1)!);
