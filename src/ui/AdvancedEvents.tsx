@@ -2,9 +2,10 @@ import { useState } from 'react';
 import type { MatchEvent } from '../log';
 import { allMons, currentBoard, nextEventId, type Workspace } from './model';
 
-type AdvType = 'status_applied' | 'status_cured' | 'stat_stage_change' | 'field_change' | 'heal' | 'passive_hp_change' | 'faint';
+type AdvType = 'status_applied' | 'status_cured' | 'stat_stage_change' | 'field_change' | 'heal' | 'passive_hp_change' | 'faint' | 'flinch';
 
 const LABELS: Array<[AdvType, string]> = [
+  ['flinch', 'Flinch (reveals action order)'],
   ['stat_stage_change', 'Stat stage (boost/drop)'],
   ['field_change', 'Field (weather/terrain/screen)'],
   ['status_applied', 'Status applied'],
@@ -42,6 +43,7 @@ export function AdvancedEvents({ ws, setWs, currentTurn }: { ws: Workspace; setW
       case 'heal': if (mon) ev = { ...base, type, target: mon, source, hpBefore, hpAfter: Number(hpAfter) }; break;
       case 'passive_hp_change': if (mon) ev = { ...base, type, target: mon, source, hpBefore, hpAfter: Number(hpAfter) }; break;
       case 'faint': if (mon) ev = { ...base, type, target: mon }; break;
+      case 'flinch': if (mon) ev = { ...base, type: 'random_outcome', mon, eventKind: 'flinch', outcome: 'yes' }; break;
     }
     if (ev) setWs({ ...ws, events: [...ws.events, ev] });
   };

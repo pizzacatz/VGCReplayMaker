@@ -108,6 +108,17 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getAllByPlaceholderText('hp after')).toHaveLength(1);
   });
 
+  it('KO logs a damage to 0 HP and a faint', () => {
+    const { getAllByText, getByText } = render(<Harness />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Flare Blitz'));
+    fireEvent.click(getByText('KO')); // KO checkbox → HP auto 0
+    fireEvent.click(getByText('Log action'));
+    // move_used + damage (→0) + faint = 3 events
+    expect(getByText('Event log (3)')).toBeTruthy();
+    expect(getAllByText(/fainted/).length).toBeGreaterThan(0); // faint event in the log
+  });
+
   it('a logged event can be edited inline', () => {
     const { getAllByText, getByText, getByPlaceholderText, getByLabelText } = render(<Harness />);
     fireEvent.click(getAllByText('Incineroar').at(-1)!);

@@ -30,9 +30,10 @@ interface TargetOutcome {
   crit: boolean;
   flinch: boolean;
   missed: boolean;
+  ko: boolean;
   status: Cert;
 }
-const blankOutcome = (): TargetOutcome => ({ hpAfter: '', crit: false, flinch: false, missed: false, status: 'clean' });
+const blankOutcome = (): TargetOutcome => ({ hpAfter: '', crit: false, flinch: false, missed: false, ko: false, status: 'clean' });
 
 export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspace) => void }) {
   const board = useMemo(() => currentBoard(ws), [ws]);
@@ -159,12 +160,16 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
           builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'miss', outcome: 'yes' }));
           continue;
         }
-        if (o.hpAfter === '') continue;
+        // KO forces HP to 0; otherwise require an entered HP.
+        const after = o.ko ? 0 : o.hpAfter === '' ? null : Number(o.hpAfter);
+        if (after === null) continue;
         const slot = slotOfMon(board, t);
         const before = slot ? board.slots[slot]!.hp : 0;
-        const after = Number(o.hpAfter);
         const eff = effOf(t)?.label ?? '1x'; // derived from the type chart, not entered
         builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit: o.crit, status: o.status, observedEffectiveness: eff }));
+        if (o.ko) {
+          builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target: t }));
+        }
         if (canFlinch && o.flinch) {
           builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'flinch', outcome: 'yes' }));
         }
@@ -265,8 +270,9 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                         {!o.missed && (
                           <>
                             <span className="muted">{before} →</span>
-                            <input type="number" placeholder="hp after" value={o.hpAfter} onChange={(e) => setOutcome(t, { hpAfter: e.target.value })} style={{ width: 90 }} />
-                            <span className="muted">{o.hpAfter !== '' ? `= ${before - Number(o.hpAfter)} dmg` : ''}</span>
+                            <input type="number" placeholder="hp after" value={o.ko ? 0 : o.hpAfter} disabled={o.ko} onChange={(e) => setOutcome(t, { hpAfter: e.target.value })} style={{ width: 90 }} />
+                            <span className="muted">{o.ko ? `= ${before} dmg (KO)` : o.hpAfter !== '' ? `= ${before - Number(o.hpAfter)} dmg` : ''}</span>
+                            <label className="chip" style={{ color: o.ko ? 'var(--bad)' : undefined }}><input type="checkbox" checked={o.ko} onChange={(e) => setOutcome(t, { ko: e.target.checked })} /> KO</label>
                             <label className="chip"><input type="checkbox" checked={o.crit} onChange={(e) => setOutcome(t, { crit: e.target.checked })} /> crit</label>
                             {canFlinch && <label className="chip"><input type="checkbox" checked={o.flinch} onChange={(e) => setOutcome(t, { flinch: e.target.checked })} /> flinched</label>}
                             <select value={o.status} onChange={(e) => setOutcome(t, { status: e.target.value as Cert })}>
