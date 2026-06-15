@@ -76,10 +76,15 @@ export function natureFor(alignment: MonAlignment): string {
   return name;
 }
 
-function baseStat(gen: Gen, species: string, stat: StatKey): number {
+/** Base value of one stat for a species, from the Champions-configured dex. */
+export function baseStatOf(gen: Gen, species: string, stat: StatKey): number {
   const data = gen.species.get(toID(species));
   if (!data) throw new Error(`species not found in dex: ${species}`);
   return data.baseStats[stat];
+}
+
+function baseStat(gen: Gen, species: string, stat: StatKey): number {
+  return baseStatOf(gen, species, stat);
 }
 
 /**
