@@ -548,28 +548,50 @@ export function endOfTurnEvents(ws: Workspace, board: ReplayState): EventBuilder
   const out: EventBuilder[] = [];
   const curTurn = ws.events.reduce((mx, e) => Math.max(mx, e.turn), 0);
   const activeIds = new Set(activeMonIds(board).filter((a) => !a.fainted).map((a) => a.monId));
+  const grassy = board.field.includes('Grassy Terrain');
   for (const m of activeMonIds(board).filter((a) => !a.fainted)) {
     let hp = m.hp;
     const max = monMaxHp(ws, m.monId) || m.maxHp;
     const types = speciesTypes(m.species);
     const item = monItem(ws, m.monId);
+    const ability = monAbility(ws, m.monId);
     const monId = m.monId;
+    // Magic Guard negates ALL indirect damage (weather, status, trap, Black Sludge) — heals still apply.
+    const magicGuard = ability === 'Magic Guard';
     const push = (source: string, delta: number, kind: 'passive_hp_change' | 'heal') => {
       const before = hp;
       hp = Math.max(0, Math.min(max, hp + delta));
       out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: kind, target: monId, source, hpBefore: before, hpAfter: hp }) as MatchEvent);
       if (hp === 0 && before > 0) out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target: monId }));
     };
-    if (board.weather === 'Sand' && !types.some((t) => ['Rock', 'Ground', 'Steel'].includes(t))) push('Sandstorm', -Math.floor(max / 16), 'passive_hp_change');
+    const sandImmune = magicGuard || ['Sand Veil', 'Sand Rush', 'Sand Force', 'Overcoat'].includes(ability ?? '');
+    if (board.weather === 'Sand' && !types.some((t) => ['Rock', 'Ground', 'Steel'].includes(t)) && !sandImmune) push('Sandstorm', -Math.floor(max / 16), 'passive_hp_change');
+    // Grassy Terrain heals grounded mons.
+    const grounded = !types.includes('Flying') && ability !== 'Levitate' && item !== 'Air Balloon';
+    if (grassy && grounded) push('Grassy Terrain', Math.floor(max / 16), 'heal');
     if (item === 'Leftovers') push('Leftovers', Math.floor(max / 16), 'heal');
-    else if (item === 'Black Sludge') push('Black Sludge', types.includes('Poison') ? Math.floor(max / 16) : -Math.floor(max / 8), types.includes('Poison') ? 'heal' : 'passive_hp_change');
+    else if (item === 'Black Sludge') {
+      if (types.includes('Poison')) push('Black Sludge', Math.floor(max / 16), 'heal');
+      else if (!magicGuard) push('Black Sludge', -Math.floor(max / 8), 'passive_hp_change');
+    }
     const status = board.status[m.monId];
-    if (status === 'brn') push('Burn', -Math.floor(max / 16), 'passive_hp_change');
-    else if (status === 'psn') push('Poison', -Math.floor(max / 8), 'passive_hp_change');
-    else if (status === 'tox') push('Poison', -Math.floor(max / 8), 'passive_hp_change');
+    // Poison Heal turns poison into a heal; otherwise status chips (unless Magic Guard).
+    if ((status === 'psn' || status === 'tox') && ability === 'Poison Heal') push('Poison Heal', Math.floor(max / 8), 'heal');
+    else if (!magicGuard) {
+      if (status === 'brn') push('Burn', -Math.floor(max / 16), 'passive_hp_change');
+      else if (status === 'psn') push('Poison', -Math.floor(max / 8), 'passive_hp_change');
+      else if (status === 'tox') push('Poison', -Math.floor(max / 8), 'passive_hp_change');
+    }
     // Partial-trapping residual (Infestation, Bind, Fire Spin, Sand Tomb, Magma Storm, …)
-    const trap = partialTrap(ws, monId, curTurn, activeIds);
-    if (trap) push(trap.source, -Math.floor(max / trap.div), 'passive_hp_change');
+    if (!magicGuard) {
+      const trap = partialTrap(ws, monId, curTurn, activeIds);
+      if (trap) push(trap.source, -Math.floor(max / trap.div), 'passive_hp_change');
+    }
+    // Flame/Toxic Orb self-inflict at end of turn (only if currently unstatused).
+    if (!status) {
+      if (item === 'Flame Orb') out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'status_applied', target: monId, status: 'brn', source: 'Flame Orb' }));
+      else if (item === 'Toxic Orb') out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'status_applied', target: monId, status: 'tox', source: 'Toxic Orb' }));
+    }
   }
   return out;
 }

@@ -217,6 +217,57 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
     expect(e.hpBefore - e.hpAfter).toBe(Math.floor(175 / 8)); // 1/8 max HP
   });
 
+  it('Magic Guard suppresses the Sandstorm chip', () => {
+    const maw = entry('A', 0, 'Clefable');
+    maw.parsed.ability = 'Magic Guard';
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [maw], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [{ eventId: 'w', seq: 1, turn: 1, type: 'field_change', field: 'Sand', action: 'set' }],
+    };
+    const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const sand = endOfTurnEvents(ws, b).map((bld, i) => bld(i + 1, 1)).filter((e) => e.type === 'passive_hp_change' && e.source === 'Sandstorm');
+    expect(sand).toHaveLength(0); // Magic Guard negates indirect damage
+  });
+
+  it('Poison Heal turns poison into a heal', () => {
+    const gli = entry('A', 0, 'Gliscor');
+    gli.parsed.ability = 'Poison Heal';
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [gli], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [{ eventId: 's', seq: 1, turn: 1, type: 'status_applied', target: 'A0', status: 'psn' }],
+    };
+    const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const eot = endOfTurnEvents(ws, b).map((bld, i) => bld(i + 1, 1));
+    expect(eot.some((e) => e.type === 'heal' && e.source === 'Poison Heal')).toBe(true);
+    expect(eot.some((e) => e.type === 'passive_hp_change' && e.source === 'Poison')).toBe(false); // no poison chip
+  });
+
+  it('Grassy Terrain heals a grounded mon', () => {
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [{ eventId: 'g', seq: 1, turn: 1, type: 'field_change', field: 'Grassy Terrain', action: 'set' }],
+    };
+    const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const eot = endOfTurnEvents(ws, b).map((bld, i) => bld(i + 1, 1));
+    expect(eot.some((e) => e.type === 'heal' && e.source === 'Grassy Terrain' && e.target === 'A0')).toBe(true);
+  });
+
+  it('Flame Orb burns its holder at end of turn (when unstatused)', () => {
+    const inc = entry('A', 0, 'Incineroar');
+    inc.parsed.item = 'Flame Orb';
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [inc], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [],
+    };
+    const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const eot = endOfTurnEvents(ws, b).map((bld, i) => bld(i + 1, 1));
+    expect(eot.some((e) => e.type === 'status_applied' && e.target === 'A0' && e.status === 'brn' && e.source === 'Flame Orb')).toBe(true);
+  });
+
   it('endOfTurnEvents: the partial trap expires after ~5 turns and stops chipping', () => {
     const ws: Workspace = {
       sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
