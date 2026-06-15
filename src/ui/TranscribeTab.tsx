@@ -5,18 +5,32 @@ import {
   activeMonIds,
   benchMons,
   currentBoard,
-  megaFormesFor,
+  megaFormeFromItem,
   monLabel,
+  moveCanFlinch,
   nextEventId,
   planTargets,
   slotOfMon,
   slotPosition,
+  type MonEntry,
   type Workspace,
 } from './model';
 import { AdvancedEvents } from './AdvancedEvents';
 import { MatchSetup } from './MatchSetup';
 
-type Mode = 'idle' | 'move' | 'switch' | 'mega';
+type Mode = 'idle' | 'move' | 'switch';
+type Cert = 'clean' | 'composite' | 'unresolved';
+
+/** Per-target outcome of the selected move (spread moves crit/flinch/miss individually). */
+interface TargetOutcome {
+  hpAfter: string;
+  crit: boolean;
+  flinch: boolean;
+  eff: string;
+  missed: boolean;
+  status: Cert;
+}
+const blankOutcome = (): TargetOutcome => ({ hpAfter: '', crit: false, flinch: false, eff: '1x', missed: false, status: 'clean' });
 
 export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspace) => void }) {
   const board = useMemo(() => currentBoard(ws), [ws]);
@@ -24,11 +38,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   const [mode, setMode] = useState<Mode>('idle');
   const [move, setMove] = useState<string | null>(null);
   const [targets, setTargets] = useState<string[]>([]);
-  const [hpAfter, setHpAfter] = useState<Record<string, string>>({});
-  const [crit, setCrit] = useState(false);
-  const [eff, setEff] = useState('1x');
-  const [status, setStatus] = useState<'clean' | 'composite' | 'unresolved'>('clean');
-  const [noDamage, setNoDamage] = useState(false);
+  const [outcomes, setOutcomes] = useState<Record<string, TargetOutcome>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const currentTurn = useMemo(() => {
@@ -42,7 +52,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   if (!board) {
     return (
       <div className="panel error">
-        <p>The event log is inconsistent (a hit references an inactive mon, or the leads changed under existing events).</p>
+        <p>The event log is inconsistent (a move/hit references an inactive mon, or the leads changed under existing events).</p>
         <div className="controls">
           <button onClick={() => setWs({ ...ws, events: ws.events.slice(0, -1) })}>Undo last event</button>
           <button onClick={() => setWs({ ...ws, events: [] })}>Clear all events</button>
@@ -51,18 +61,17 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     );
   }
 
-  const monMoves = (monId: string): string[] => [...ws.sideA.mons, ...ws.sideB.mons].find((m) => m.monId === monId)?.parsed.moves ?? [];
+  const allRoster: MonEntry[] = [...ws.sideA.mons, ...ws.sideB.mons];
+  const entryOf = (monId: string) => allRoster.find((m) => m.monId === monId);
+  const monMoves = (monId: string): string[] => entryOf(monId)?.parsed.moves ?? [];
   const actives = activeMonIds(board);
+
   const reset = () => {
     setActor(null);
     setMode('idle');
     setMove(null);
     setTargets([]);
-    setHpAfter({});
-    setCrit(false);
-    setEff('1x');
-    setStatus('clean');
-    setNoDamage(false);
+    setOutcomes({});
   };
 
   const emit = (builders: Array<(seq: number, turn: number) => MatchEvent>) => {
@@ -84,32 +93,61 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     setMode('move');
     setMove(null);
     setTargets([]);
-    setHpAfter({});
-  };
-
-  const pickMove = (m: string) => {
-    setMove(m);
-    const plan = planTargets(m, actor!, board);
-    setTargets(plan.spread ? plan.candidates : plan.candidates.slice(0, 1));
-    setHpAfter({});
-    setNoDamage(!plan.isDamaging);
+    setOutcomes({});
   };
 
   const plan = move && actor ? planTargets(move, actor, board) : null;
+
+  const pickMove = (m: string) => {
+    setMove(m);
+    const p = planTargets(m, actor!, board);
+    const ts = p.spread ? p.candidates : p.candidates.slice(0, 1);
+    setTargets(ts);
+    setOutcomes(Object.fromEntries(ts.map((t) => [t, blankOutcome()])));
+  };
+
+  const setOutcome = (t: string, patch: Partial<TargetOutcome>) =>
+    setOutcomes((o) => ({ ...o, [t]: { ...(o[t] ?? blankOutcome()), ...patch } }));
+
+  const toggleTarget = (t: string) => {
+    if (plan?.spread) return;
+    if (targets.includes(t)) {
+      setTargets(targets.filter((x) => x !== t));
+    } else {
+      setTargets([...targets, t]);
+      if (!outcomes[t]) setOutcome(t, {});
+    }
+  };
+
+  const actorEntry = actor ? entryOf(actor) : undefined;
+  const actorItem = actorEntry?.parsed.item;
+  const actorAbility = actorEntry?.parsed.ability;
+  const actorBase = actorEntry?.parsed.species;
+  const actorBoardSpecies = actor ? actives.find((a) => a.monId === actor)?.species : undefined;
+  const alreadyMega = (actorBoardSpecies ?? '').includes('-Mega');
+  const megaForme = actorBase ? megaFormeFromItem(actorItem, actorBase) : null;
+  const canFlinch = move ? moveCanFlinch(move, actorItem, actorAbility) : false;
 
   const confirmMove = () => {
     if (!actor || !move) return;
     const builders: Array<(seq: number, turn: number) => MatchEvent> = [
       (seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'move_used', user: actor, move, targets, isSpread: plan?.spread ?? false }),
     ];
-    if (!noDamage && plan?.isDamaging) {
+    if (plan?.isDamaging) {
       for (const t of targets) {
+        const o = outcomes[t] ?? blankOutcome();
+        if (o.missed) {
+          builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'miss', outcome: 'yes' }));
+          continue;
+        }
+        if (o.hpAfter === '') continue;
         const slot = slotOfMon(board, t);
         const before = slot ? board.slots[slot]!.hp : 0;
-        const afterRaw = hpAfter[t];
-        if (afterRaw === undefined || afterRaw === '') continue;
-        const after = Number(afterRaw);
-        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit, status, observedEffectiveness: eff }));
+        const after = Number(o.hpAfter);
+        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit: o.crit, status: o.status, observedEffectiveness: o.eff }));
+        if (canFlinch && o.flinch) {
+          builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'flinch', outcome: 'yes' }));
+        }
       }
     }
     emit(builders);
@@ -124,13 +162,11 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     reset();
   };
 
-  const doMega = (forme: string) => {
-    emit([(seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'mega_evolution', mon: actor!, megaSpecies: forme })]);
+  const doMega = () => {
+    if (!actor || !megaForme) return;
+    emit([(seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'mega_evolution', mon: actor, megaSpecies: megaForme })]);
     reset();
   };
-
-  const actorSpecies = actor ? actives.find((a) => a.monId === actor)?.species : undefined;
-  const megaFormes = actorSpecies ? megaFormesFor(actorSpecies.replace(/-Mega.*$/, '')) : [];
 
   return (
     <div className="row">
@@ -143,14 +179,12 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
           <span className="muted">Click the acting Pokémon, then its move.</span>
         </div>
 
-        {/* Board — click to choose the actor */}
         <Board actives={actives} actor={actor} onPick={pickActor} />
 
-        {/* Action panel */}
         {actor && (
           <div className="panel" style={{ marginTop: 12, background: 'var(--panel2)' }}>
             <div className="controls" style={{ marginTop: 0 }}>
-              <strong>{monLabel(ws, actor)}</strong>
+              <strong>{monLabel(ws, actor)}{alreadyMega ? ' (Mega)' : ''}</strong>
               <button onClick={reset}>cancel</button>
             </div>
 
@@ -163,7 +197,9 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                 </div>
                 <div className="controls">
                   <button onClick={() => setMode('switch')}>Switch out ↔</button>
-                  {megaFormes.length > 0 && <button onClick={() => setMode('mega')}>Mega Evolve ✦</button>}
+                  {megaForme && !alreadyMega && (
+                    <button onClick={doMega} title={`held stone → ${megaForme}`}>Mega Evolve ✦</button>
+                  )}
                 </div>
               </>
             )}
@@ -180,64 +216,45 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                   <>
                     <div className="muted" style={{ fontSize: 12 }}>Targets (foes first){plan.spread ? ' — spread, all selected' : ''}:</div>
                     <div className="chips">
-                      {plan.candidates.map((t) => {
-                        const on = targets.includes(t);
-                        return (
-                          <button
-                            key={t}
-                            className={on ? 'primary' : ''}
-                            onClick={() => {
-                              if (plan.spread) return;
-                              setTargets(on ? targets.filter((x) => x !== t) : [...targets, t]);
-                            }}
-                          >
-                            {monLabel(ws, t)}
-                          </button>
-                        );
-                      })}
+                      {plan.candidates.map((t) => (
+                        <button key={t} className={targets.includes(t) ? 'primary' : ''} onClick={() => toggleTarget(t)}>
+                          {monLabel(ws, t)}
+                        </button>
+                      ))}
                     </div>
                   </>
                 )}
 
-                {!noDamage && plan.isDamaging && targets.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    {targets.map((t) => {
-                      const slot = slotOfMon(board, t);
-                      const before = slot ? board.slots[slot]!.hp : 0;
-                      return (
-                        <div className="field" key={t}>
-                          <label>{monLabel(ws, t)} HP</label>
-                          <span className="muted">{before} →</span>
-                          <input
-                            type="number"
-                            autoFocus
-                            placeholder="hp after"
-                            value={hpAfter[t] ?? ''}
-                            onChange={(e) => setHpAfter({ ...hpAfter, [t]: e.target.value })}
-                          />
-                          <span className="muted">{hpAfter[t] !== undefined && hpAfter[t] !== '' ? `= ${before - Number(hpAfter[t])} dmg` : ''}</span>
-                        </div>
-                      );
-                    })}
-                    <div className="controls" style={{ flexWrap: 'wrap' }}>
-                      <label className="chip"><input type="checkbox" checked={crit} onChange={(e) => setCrit(e.target.checked)} /> crit</label>
-                      <select value={eff} onChange={(e) => setEff(e.target.value)}>
-                        {['0.25x', '0.5x', '1x', '2x', '4x'].map((x) => <option key={x}>{x}</option>)}
-                      </select>
-                      <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
-                        <option value="clean">clean</option>
-                        <option value="composite">composite</option>
-                        <option value="unresolved">unresolved</option>
-                      </select>
+                {plan.isDamaging && targets.map((t) => {
+                  const slot = slotOfMon(board, t);
+                  const before = slot ? board.slots[slot]!.hp : 0;
+                  const o = outcomes[t] ?? blankOutcome();
+                  return (
+                    <div className="panel" key={t} style={{ marginTop: 8 }}>
+                      <strong>{monLabel(ws, t)}</strong>
+                      <div className="controls" style={{ flexWrap: 'wrap', marginTop: 4 }}>
+                        <label className="chip"><input type="checkbox" checked={o.missed} onChange={(e) => setOutcome(t, { missed: e.target.checked })} /> missed</label>
+                        {!o.missed && (
+                          <>
+                            <span className="muted">{before} →</span>
+                            <input type="number" placeholder="hp after" value={o.hpAfter} onChange={(e) => setOutcome(t, { hpAfter: e.target.value })} style={{ width: 90 }} />
+                            <span className="muted">{o.hpAfter !== '' ? `= ${before - Number(o.hpAfter)} dmg` : ''}</span>
+                            <label className="chip"><input type="checkbox" checked={o.crit} onChange={(e) => setOutcome(t, { crit: e.target.checked })} /> crit</label>
+                            {canFlinch && <label className="chip"><input type="checkbox" checked={o.flinch} onChange={(e) => setOutcome(t, { flinch: e.target.checked })} /> flinched</label>}
+                            <select value={o.eff} onChange={(e) => setOutcome(t, { eff: e.target.value })}>{['0.25x', '0.5x', '1x', '2x', '4x'].map((x) => <option key={x}>{x}</option>)}</select>
+                            <select value={o.status} onChange={(e) => setOutcome(t, { status: e.target.value as Cert })}>
+                              <option value="clean">clean</option>
+                              <option value="composite">composite</option>
+                              <option value="unresolved">unresolved</option>
+                            </select>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })}
 
-                <label className="chip" style={{ marginTop: 6, display: 'inline-block' }}>
-                  <input type="checkbox" checked={noDamage} onChange={(e) => setNoDamage(e.target.checked)} /> no damage (status / missed)
-                </label>
-
-                <ReconstructedPanel ws={ws} attacker={actor} state={board} />
+                <ReconstructedPanel attacker={actor} state={board} />
 
                 <div style={{ marginTop: 8 }}>
                   <button className="primary" onClick={confirmMove}>Log action</button>
@@ -254,24 +271,11 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                   <div className="muted" style={{ fontSize: 12 }}>Bring in:</div>
                   <div className="chips">
                     {bench.length === 0 && <span className="muted">no bench mon available</span>}
-                    {bench.map((m) => (
-                      <button key={m.monId} onClick={() => doSwitch(m.monId)}>{m.parsed.species}</button>
-                    ))}
+                    {bench.map((m) => <button key={m.monId} onClick={() => doSwitch(m.monId)}>{m.parsed.species}</button>)}
                   </div>
                 </div>
               );
             })()}
-
-            {mode === 'mega' && (
-              <div>
-                <div className="muted" style={{ fontSize: 12 }}>Mega forme:</div>
-                <div className="chips">
-                  {megaFormes.map((f) => (
-                    <button key={f} onClick={() => doMega(f)}>{f}</button>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -283,7 +287,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
 
       <div className="col panel">
         <h2>Event log ({ws.events.length})</h2>
-        {ws.events.length === 0 && <p className="muted">No events yet. Click a Pokémon above to start.</p>}
+        {ws.events.length === 0 && <p className="muted">No events yet. Set your leads above, then click a Pokémon to start.</p>}
         {[...ws.events].sort((a, b) => a.seq - b.seq).map((e) => (
           <div key={e.eventId} className="event">
             <span className="seq">{e.seq}</span>
@@ -308,27 +312,26 @@ function Board({ actives, actor, onPick }: { actives: ReturnType<typeof activeMo
       onClick={() => onPick(m.monId)}
     >
       <strong>{m.species}</strong>
-      <div className="muted" style={{ fontSize: 12 }}>{m.hp}/{m.maxHp} HP{m.fainted ? ' · fainted' : ''}</div>
+      <div className="muted" style={{ fontSize: 12 }}>{`${m.hp}/${m.maxHp} HP${m.fainted ? ' · fainted' : ''}`}</div>
     </button>
   );
   return (
     <>
       <div className="muted" style={{ fontSize: 12 }}>Opponent</div>
-      <div className="board">{foes.length ? foes.map(card) : <span className="muted">no active mon</span>}</div>
+      <div className="board">{foes.length ? foes.map(card) : <span className="muted">no active mon — set leads above</span>}</div>
       <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>You</div>
-      <div className="board">{you.length ? you.map(card) : <span className="muted">no active mon</span>}</div>
+      <div className="board">{you.length ? you.map(card) : <span className="muted">no active mon — set leads above</span>}</div>
     </>
   );
 }
 
-function ReconstructedPanel({ ws, attacker, state }: { ws: Workspace; attacker: string; state: ReplayState }) {
+function ReconstructedPanel({ attacker, state }: { attacker: string; state: ReplayState }) {
   const chips: string[] = [];
   if (state.weather) chips.push(`weather: ${state.weather}`);
   for (const c of state.field) chips.push(c);
   const ab = state.boosts[attacker];
   if (ab) for (const [s, n] of Object.entries(ab)) if (n) chips.push(`atk ${s} ${n > 0 ? '+' : ''}${n}`);
   if (state.status[attacker]) chips.push(`atk ${state.status[attacker]}`);
-  void ws;
   if (chips.length === 0) return null;
   return (
     <div style={{ marginTop: 8 }}>
@@ -352,7 +355,7 @@ function describe(e: MatchEvent, label: (id: string) => string): string {
     case 'stat_stage_change': return `${label(e.target)} ${e.stat} ${e.stages > 0 ? '+' : ''}${e.stages}`;
     case 'field_change': return `${e.field} ${e.action}${e.side ? ` [${e.side}]` : ''}`;
     case 'item_or_ability_event': return `${label(e.mon)} ${e.kind} ${e.name}`;
-    case 'mega_evolution': return `${label(e.mon)} Mega → ${e.megaSpecies}`;
-    case 'random_outcome': return `${label(e.mon)} ${e.eventKind}: ${e.outcome}`;
+    case 'mega_evolution': return `${label(e.mon)} Mega-Evolved → ${e.megaSpecies}`;
+    case 'random_outcome': return e.eventKind === 'flinch' ? `${label(e.mon)} flinched` : e.eventKind === 'miss' ? `${label(e.mon)} was missed` : `${label(e.mon)} ${e.eventKind}: ${e.outcome}`;
   }
 }

@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { MatchEvent, MatchLog } from '../log';
 import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { broughtInfo, leadMonIds, megaFormesFor, planTargets, type MonEntry, type Workspace } from './model';
+import { broughtInfo, leadMonIds, megaFormeFromItem, moveCanFlinch, planTargets, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -42,10 +42,29 @@ describe('planTargets — legal targets, foes first', () => {
   });
 });
 
-describe('megaFormesFor — dex-validated, no invented data', () => {
-  it('finds mega formes where they exist', () => {
-    expect(megaFormesFor('Charizard').sort()).toEqual(['Charizard-Mega-X', 'Charizard-Mega-Y']);
-    expect(megaFormesFor('Incineroar')).toEqual([]); // no mega
+describe('megaFormeFromItem — forme dictated by the held stone', () => {
+  it('resolves the forme from the mega stone', () => {
+    expect(megaFormeFromItem('Aerodactylite', 'Aerodactyl')).toBe('Aerodactyl-Mega');
+    expect(megaFormeFromItem('Charizardite X', 'Charizard')).toBe('Charizard-Mega-X');
+    expect(megaFormeFromItem('Charizardite Y', 'Charizard')).toBe('Charizard-Mega-Y');
+  });
+  it('returns null without a mega stone', () => {
+    expect(megaFormeFromItem(undefined, 'Garchomp')).toBeNull();
+    expect(megaFormeFromItem('Leftovers', 'Garchomp')).toBeNull();
+  });
+});
+
+describe('moveCanFlinch — only where flinch is actually possible', () => {
+  it('true for flinch moves and King’s Rock / Stench', () => {
+    expect(moveCanFlinch('Rock Slide')).toBe(true); // 30% flinch secondary
+    expect(moveCanFlinch('Fake Out')).toBe(true);
+    expect(moveCanFlinch('Earthquake', "King's Rock")).toBe(true);
+    expect(moveCanFlinch('Earthquake', undefined, 'Stench')).toBe(true);
+  });
+  it('false otherwise', () => {
+    expect(moveCanFlinch('Flare Blitz')).toBe(false); // burn, not flinch
+    expect(moveCanFlinch('Earthquake')).toBe(false);
+    expect(moveCanFlinch('Swords Dance')).toBe(false); // status
   });
 });
 
@@ -58,10 +77,11 @@ const wsWith = (leadsB: string[], events: MatchEvent[]): Workspace => ({
   events,
 });
 
-describe('leadMonIds — selectable, falls back to first two', () => {
-  it('uses explicit leads, else the first two', () => {
+describe('leadMonIds — explicit selection is respected, no surprise fill', () => {
+  it('uses explicit leads; empty stays empty; only undefined falls back to first two', () => {
     expect(leadMonIds(wsWith(['B2', 'B4'], []).sideB)).toEqual(['B2', 'B4']);
-    expect(leadMonIds(wsWith([], []).sideB)).toEqual(['B0', 'B1']);
+    expect(leadMonIds(wsWith([], []).sideB)).toEqual([]); // explicit empty → empty (predictable)
+    expect(leadMonIds({ player: 'O', rawPaste: '', mons: sixMon('B') })).toEqual(['B0', 'B1']); // undefined → default
   });
 });
 

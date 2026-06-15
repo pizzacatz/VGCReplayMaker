@@ -15,7 +15,12 @@ function SidePanel({
   const reparse = (paste: string) => {
     const { mons, error: err } = parseSide(side, paste);
     setError(err);
-    onChange({ ...state, rawPaste: paste, mons: err ? state.mons : mons });
+    if (err) {
+      onChange({ ...state, rawPaste: paste });
+    } else {
+      // default the starting two explicitly (visible + changeable in Transcribe)
+      onChange({ ...state, rawPaste: paste, mons, leads: mons.slice(0, 2).map((m) => m.monId) });
+    }
   };
 
   return (

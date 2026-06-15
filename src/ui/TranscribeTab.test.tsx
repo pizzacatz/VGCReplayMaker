@@ -76,7 +76,7 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText('Clear all events')).toBeTruthy(); // graceful recovery panel, not a thrown crash
   });
 
-  it('a board mon with a spread move and a self move does not crash', () => {
+  it('spread move: per-target HP/crit/flinch, two damage events; self move logs once', () => {
     const ws: Workspace = {
       sideA: { player: 'You', rawPaste: '', mons: [entry('A', 0, 'Tyranitar', ['Rock Slide', 'Dragon Dance']), entry('A', 1, 'Zapdos')], leads: ['A0', 'A1'] },
       sideB: { player: 'Opp', rawPaste: '', mons: [entry('B', 0, 'Garchomp'), entry('B', 1, 'Annihilape')], leads: ['B0', 'B1'] },
@@ -86,12 +86,33 @@ describe('TranscribeTab does not crash on interaction', () => {
       const [w, setW] = useState(ws);
       return <TranscribeTab ws={w} setWs={setW} />;
     }
-    const { getAllByText, getByText } = render(<H />);
+    const { getAllByText, getByText, getAllByPlaceholderText } = render(<H />);
     fireEvent.click(getAllByText('Tyranitar').at(-1)!);
-    fireEvent.click(getByText('Rock Slide')); // spread → auto-targets all foes
-    expect(getByText('Log action')).toBeTruthy();
-    fireEvent.click(getByText('change move'));
-    fireEvent.click(getByText('Dragon Dance')); // self/status
-    expect(getByText('Log action')).toBeTruthy();
+    fireEvent.click(getByText('Rock Slide')); // spread → both foes auto-targeted
+    const hpInputs = getAllByPlaceholderText('hp after');
+    expect(hpInputs).toHaveLength(2); // one per target
+    expect(getAllByText('flinched')).toHaveLength(2); // Rock Slide can flinch each target
+    fireEvent.change(hpInputs[0]!, { target: { value: '100' } });
+    fireEvent.change(hpInputs[1]!, { target: { value: '120' } });
+    fireEvent.click(getByText('Log action'));
+    expect(getByText('Event log (3)')).toBeTruthy(); // move_used + 2 damage
+  });
+
+  it('a Pokémon holding a mega stone shows a Mega Evolve button (no forme choice)', () => {
+    const aero = entry('A', 0, 'Aerodactyl', ['Rock Slide']);
+    aero.parsed.item = 'Aerodactylite';
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [aero, entry('A', 1, 'Zapdos')], leads: ['A0', 'A1'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getAllByText, getByText } = render(<H />);
+    fireEvent.click(getAllByText('Aerodactyl').at(-1)!);
+    fireEvent.click(getByText('Mega Evolve ✦')); // single button, forme from the stone
+    expect(getByText(/Mega-Evolved → Aerodactyl-Mega/)).toBeTruthy();
   });
 });

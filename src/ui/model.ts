@@ -41,10 +41,14 @@ export function emptyWorkspace(): Workspace {
   };
 }
 
-/** The two starting mon ids for a side (selected leads, or the first two as a fallback). */
+/**
+ * The starting mon ids for a side. Once `leads` is set (even to a partial/empty
+ * list) it is respected exactly — no surprise auto-fill. Only a never-set
+ * (undefined) leads list falls back to the first two (legacy/default).
+ */
 export function leadMonIds(side: SideState): string[] {
-  const valid = (side.leads ?? []).filter((id) => side.mons.some((m) => m.monId === id));
-  return valid.length ? valid.slice(0, 2) : side.mons.slice(0, 2).map((m) => m.monId);
+  if (side.leads !== undefined) return side.leads.filter((id) => side.mons.some((m) => m.monId === id)).slice(0, 2);
+  return side.mons.slice(0, 2).map((m) => m.monId);
 }
 
 export type SideId = 'A' | 'B';
@@ -233,10 +237,39 @@ export function planTargets(move: string, actorMonId: string, board: ReplayState
   }
 }
 
-/** Mega formes available for a species (dex-validated; no invented data). */
-export function megaFormesFor(species: string): string[] {
-  const gen = championsGen();
-  return [`${species}-Mega`, `${species}-Mega-X`, `${species}-Mega-Y`].filter((c) => gen.species.get(toID(c)));
+/**
+ * The mega forme a mon evolves into — determined ENTIRELY by its held Mega Stone
+ * (no player choice; the stone dictates the forme). Returns null if the item is
+ * not a mega stone for this species. Dex-driven, no invented data.
+ */
+export function megaFormeFromItem(item: string | undefined, species: string): string | null {
+  if (!item) return null;
+  try {
+    const data = Dex.items.get(item) as { exists: boolean; megaStone?: Record<string, string> };
+    if (!data.exists || !data.megaStone) return null;
+    return data.megaStone[species] ?? Object.values(data.megaStone)[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a move can cause flinch on THIS hit — only true for moves with a flinch
+ * secondary, or any damaging move when the attacker holds King's Rock / Razor Fang
+ * or has the Stench ability. Used to show the flinch option only where it applies.
+ */
+export function moveCanFlinch(move: string, attackerItem?: string, attackerAbility?: string): boolean {
+  try {
+    const m = Dex.moves.get(move);
+    if (!m.exists || m.category === 'Status') return false;
+    const secs = [m.secondary, ...((m as { secondaries?: Array<{ volatileStatus?: string }> | null }).secondaries ?? [])];
+    if (secs.some((s) => s && (s as { volatileStatus?: string }).volatileStatus === 'flinch')) return true;
+    if (attackerItem === "King's Rock" || attackerItem === 'Razor Fang') return true;
+    if (attackerAbility === 'Stench') return true;
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 export function slotPosition(slot: string): { side: Side; position: Position } {

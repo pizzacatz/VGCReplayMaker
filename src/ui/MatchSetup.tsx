@@ -16,10 +16,11 @@ export function MatchSetup({ ws, setWs, startOpen }: { ws: Workspace; setWs: (w:
 
   const toggleLead = (side: SideId, monId: string) => {
     const s = side === 'A' ? ws.sideA : ws.sideB;
-    let leads = s.leads && s.leads.length ? [...s.leads] : leadMonIds(s);
-    if (leads.includes(monId)) leads = leads.filter((x) => x !== monId);
-    else if (leads.length < 2) leads = [...leads, monId];
-    else leads = [leads[1]!, monId]; // replace the older lead
+    const cur = leadMonIds(s);
+    let leads: string[];
+    if (cur.includes(monId)) leads = cur.filter((x) => x !== monId); // remove
+    else if (cur.length < 2) leads = [...cur, monId]; // add to next open slot
+    else return; // already 2 chosen — remove one first (no surprise replacement)
     setSide(side, { ...s, leads });
   };
 
@@ -55,6 +56,7 @@ function SideSetup({
 }) {
   if (state.mons.length === 0) return <div className="col"><div className="muted">{label}: no team</div></div>;
   const leads = leadMonIds(state);
+  const full = leads.length >= 2;
   const info = broughtInfo(ws, side);
   const status = (monId: string): 'lead' | 'brought' | 'not' | 'unknown' => {
     if (leads.includes(monId)) return 'lead';
@@ -62,27 +64,29 @@ function SideSetup({
     if (info.brought.includes(monId)) return 'brought';
     return 'unknown';
   };
+  const nameOf = (monId?: string) => (monId ? state.mons.find((m) => m.monId === monId)?.parsed.species ?? '—' : '—');
 
   return (
     <div className="col">
-      <div className="muted" style={{ fontSize: 12 }}>{label} · pick the 2 starters (click); bring deduced below</div>
-      <div className="chips" style={{ marginTop: 6 }}>
+      <div className="muted" style={{ fontSize: 12 }}>{label} · click two starters{full ? ' — both set (click one to change)' : leads.length === 1 ? ' — pick one more' : ''}</div>
+      <div className="chips" style={{ margin: '6px 0' }}>
+        <span className="chip">Lead L: <strong>{nameOf(leads[0])}</strong></span>
+        <span className="chip">Lead R: <strong>{nameOf(leads[1])}</strong></span>
+      </div>
+      <div className="chips">
         {state.mons.map((m) => {
           const st = status(m.monId);
           const isLead = st === 'lead';
           const pos = leads.indexOf(m.monId);
+          // when two are chosen, dim the non-leads so it's clear you remove one first
+          const dim = (!isLead && full) || st === 'not';
           return (
             <button
               key={m.monId}
               className={isLead ? 'primary' : ''}
-              style={st === 'not' ? { opacity: 0.4, textDecoration: 'line-through' } : undefined}
+              style={dim ? { opacity: 0.4, ...(st === 'not' ? { textDecoration: 'line-through' } : {}) } : undefined}
               onClick={() => onToggleLead(side, m.monId)}
-              title={
-                st === 'lead' ? `lead (${pos === 0 ? 'left' : 'right'})`
-                  : st === 'brought' ? 'brought (switched in)'
-                    : st === 'not' ? 'deduced NOT brought'
-                      : 'not yet seen'
-              }
+              title={isLead ? `lead (${pos === 0 ? 'left' : 'right'}) — click to remove` : st === 'brought' ? 'brought (switched in)' : st === 'not' ? 'deduced NOT brought' : full ? 'remove a lead first' : 'click to set as a lead'}
             >
               {m.parsed.species + (isLead ? ` ◀${pos === 0 ? 'L' : 'R'}` : st === 'brought' ? ' ✓' : st === 'not' ? ' ✗' : '')}
             </button>
@@ -90,12 +94,8 @@ function SideSetup({
         })}
       </div>
       <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-        Brought {info.brought.length}/{BRING_COUNT}
-        {info.confirmed
-          ? ` — bring confirmed; ${info.notBrought.length} deduced not brought`
-          : info.unknown.length
-            ? ` — ${info.unknown.length} still unseen (possibly brought)`
-            : ''}
+        {`Brought ${info.brought.length}/${BRING_COUNT}` +
+          (info.confirmed ? ` — bring confirmed; ${info.notBrought.length} deduced not brought` : info.unknown.length ? ` — ${info.unknown.length} still unseen (possibly brought)` : '')}
       </div>
     </div>
   );
