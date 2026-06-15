@@ -10,6 +10,7 @@ import {
   moveCanFlinch,
   nextEventId,
   planTargets,
+  protectionBlocking,
   slotOfMon,
   slotPosition,
   typeEffectiveness,
@@ -105,7 +106,8 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     const p = planTargets(m, actor!, board);
     const ts = p.spread ? p.candidates : p.candidates.slice(0, 1);
     setTargets(ts);
-    setOutcomes(Object.fromEntries(ts.map((t) => [t, blankOutcome()])));
+    // auto-mark targets blocked by Protect / Wide Guard / Quick Guard this turn
+    setOutcomes(Object.fromEntries(ts.map((t) => [t, { ...blankOutcome(), missed: !!protectionBlocking(ws, t, m, currentTurn) }])));
   };
 
   const setOutcome = (t: string, patch: Partial<TargetOutcome>) =>
@@ -118,7 +120,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
       setTargets([]);
     } else {
       setTargets([t]);
-      setOutcomes({ [t]: outcomes[t] ?? blankOutcome() });
+      setOutcomes({ [t]: outcomes[t] ?? { ...blankOutcome(), missed: !!(move && protectionBlocking(ws, t, move, currentTurn)) } });
     }
   };
 
@@ -174,9 +176,9 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
 
   const doSwitch = (incoming: string) => {
     const slot = slotOfMon(board, actor!);
-    if (!slot) return;
+    if (!slot || !actor) return;
     const { side, position } = slotPosition(slot);
-    emit([(seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'switch', side, position, in: incoming })]);
+    emit([(seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'switch', side, position, out: actor, in: incoming })]);
     reset();
   };
 
@@ -248,6 +250,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                   const before = slot ? board.slots[slot]!.hp : 0;
                   const o = outcomes[t] ?? blankOutcome();
                   const eff = effOf(t);
+                  const blocked = move ? protectionBlocking(ws, t, move, currentTurn) : null;
                   return (
                     <div className="panel" key={t} style={{ marginTop: 8 }}>
                       <strong>{monLabel(ws, t)}</strong>
@@ -256,8 +259,9 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                           {eff.text}
                         </span>
                       )}
+                      {blocked && <span className="chip" style={{ marginLeft: 6, color: 'var(--accent)' }}>🛡 blocked by {blocked}</span>}
                       <div className="controls" style={{ flexWrap: 'wrap', marginTop: 4 }}>
-                        <label className="chip"><input type="checkbox" checked={o.missed} onChange={(e) => setOutcome(t, { missed: e.target.checked })} /> missed</label>
+                        <label className="chip"><input type="checkbox" checked={o.missed} onChange={(e) => setOutcome(t, { missed: e.target.checked })} /> {blocked ? 'blocked (no damage)' : 'missed'}</label>
                         {!o.missed && (
                           <>
                             <span className="muted">{before} →</span>
@@ -398,7 +402,7 @@ function describe(e: MatchEvent, label: (id: string) => string): string {
     case 'damage': return `${label(e.attacker)} ${e.move} → ${label(e.defender)}  ${e.hpBefore}→${e.hpAfter} [${e.status}]${e.crit ? ' CRIT' : ''}`;
     case 'heal': return `${label(e.target)} healed ${e.hpBefore}→${e.hpAfter} (${e.source})`;
     case 'passive_hp_change': return `${label(e.target)} chip ${e.hpBefore}→${e.hpAfter} (${e.source})`;
-    case 'switch': return `switch ${e.side}${e.position} → ${label(e.in)}`;
+    case 'switch': return e.out ? `${label(e.out)} → ${label(e.in)} (switch)` : `${label(e.in)} switched in (${e.side} ${e.position === 0 ? 'left' : 'right'})`;
     case 'faint': return `${label(e.target)} fainted`;
     case 'status_applied': return `${label(e.target)} → ${e.status}`;
     case 'status_cured': return `${label(e.target)} cured ${e.status}`;

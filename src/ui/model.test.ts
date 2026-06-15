@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { MatchEvent, MatchLog } from '../log';
 import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { broughtInfo, leadMonIds, leadSlots, megaFormeFromItem, moveCanFlinch, planTargets, typeEffectiveness, type MonEntry, type Workspace } from './model';
+import { broughtInfo, leadMonIds, leadSlots, megaFormeFromItem, moveCanFlinch, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -97,6 +97,34 @@ describe('typeEffectiveness — derived from the type chart, not entered', () =>
     expect(typeEffectiveness('Ice Beam', 'Garchomp')?.mult).toBe(4); // Ice vs Dragon + Ground
     expect(typeEffectiveness('Surf', 'Garchomp')?.mult).toBe(1); // Water: ×2 Ground, ×0.5 Dragon → neutral
     expect(typeEffectiveness('Swords Dance', 'Garchomp')).toBeNull();
+  });
+  it('uses the requested phrasing', () => {
+    expect(typeEffectiveness('Rock Slide', 'Incineroar')?.text).toBe('Super Effective (2x)');
+    expect(typeEffectiveness('Ice Beam', 'Garchomp')?.text).toBe('Extremely Effective (4x)');
+    expect(typeEffectiveness('Earthquake', 'Zapdos')?.text).toBe('Immune (0x)');
+  });
+});
+
+describe('protectionBlocking — derive blocked hits from Protect / Wide Guard', () => {
+  const protectWs = (moves: Array<{ user: string; move: string }>): Workspace => ({
+    sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+    sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp'), entry('B', 1, 'Annihilape')], leads: ['B0', 'B1'] },
+    events: moves.map((mv, i) => ({ eventId: `m${i}`, seq: i + 1, turn: 1, type: 'move_used' as const, user: mv.user, move: mv.move, targets: [] })),
+  });
+
+  it('Protect blocks a single-target move on the protector only', () => {
+    const ws = protectWs([{ user: 'B0', move: 'Protect' }]);
+    expect(protectionBlocking(ws, 'B0', 'Flare Blitz', 1)).toBe('Protect');
+    expect(protectionBlocking(ws, 'B1', 'Flare Blitz', 1)).toBeNull();
+  });
+  it('Wide Guard blocks spread moves for the whole side, not single-target', () => {
+    const ws = protectWs([{ user: 'B0', move: 'Wide Guard' }]);
+    expect(protectionBlocking(ws, 'B1', 'Rock Slide', 1)).toBe('Wide Guard');
+    expect(protectionBlocking(ws, 'B1', 'Flare Blitz', 1)).toBeNull();
+  });
+  it('Feint bypasses protection', () => {
+    const ws = protectWs([{ user: 'B0', move: 'Protect' }]);
+    expect(protectionBlocking(ws, 'B0', 'Feint', 1)).toBeNull();
   });
 });
 

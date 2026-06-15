@@ -268,6 +268,43 @@ interface DexTypeOps {
   getImmunity(source: string, target: string): boolean;
 }
 
+/** Self-protect volatiles that block damage (Endure deliberately excluded — it doesn't block). */
+const PROTECT_VOLATILES = new Set(['protect', 'spikyshield', 'banefulbunker', 'kingsshield', 'maxguard', 'silktrap', 'obstruct', 'burningbulwark']);
+
+function rosterSideOf(ws: Workspace, monId: string): SideId | null {
+  if (ws.sideA.mons.some((m) => m.monId === monId)) return 'A';
+  if (ws.sideB.mons.some((m) => m.monId === monId)) return 'B';
+  return null;
+}
+
+/**
+ * Whether a damaging move on `targetMonId` is blocked this turn by a protection
+ * move — self-protect (Protect/Detect/Spiky Shield/King's Shield/Max Guard…),
+ * Wide Guard (spread moves), or Quick Guard (priority moves). Returns the
+ * blocking move's name, or null. Moves with breaksProtect (Feint) bypass it.
+ */
+export function protectionBlocking(ws: Workspace, targetMonId: string, incomingMove: string, turn: number): string | null {
+  try {
+    const m = Dex.moves.get(incomingMove) as { exists: boolean; category: string; target: string; priority?: number; breaksProtect?: boolean };
+    if (!m.exists || m.category === 'Status' || m.breaksProtect) return null;
+    const targetSide = rosterSideOf(ws, targetMonId);
+    const movesThisTurn = ws.events.filter((e): e is Extract<MatchEvent, { type: 'move_used' }> => e.type === 'move_used' && e.turn === turn);
+    for (const ev of movesThisTurn) {
+      const pm = Dex.moves.get(ev.move) as { volatileStatus?: string; sideCondition?: string; stallingMove?: boolean };
+      // self-protect by the target itself
+      if (ev.user === targetMonId && pm.stallingMove && pm.volatileStatus && PROTECT_VOLATILES.has(pm.volatileStatus)) return ev.move;
+      // side guards on the target's side
+      if (rosterSideOf(ws, ev.user) === targetSide) {
+        if (pm.sideCondition === 'wideguard' && (m.target === 'allAdjacentFoes' || m.target === 'allAdjacent')) return ev.move;
+        if (pm.sideCondition === 'quickguard' && (m.priority ?? 0) > 0) return ev.move;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function effLabel(mult: number): string {
   if (mult === 0) return '0x';
   if (mult === 0.25) return '0.25x';
@@ -275,6 +312,15 @@ function effLabel(mult: number): string {
   if (mult === 2) return '2x';
   if (mult === 4) return '4x';
   return '1x';
+}
+
+function effText(mult: number): string {
+  if (mult === 0) return 'Immune (0x)';
+  if (mult === 0.25) return 'Mostly Ineffective (0.25x)';
+  if (mult === 0.5) return 'Not Very Effective (0.5x)';
+  if (mult === 2) return 'Super Effective (2x)';
+  if (mult === 4) return 'Extremely Effective (4x)';
+  return 'Effective (1x)';
 }
 
 export interface Effectiveness {
@@ -305,9 +351,7 @@ export function typeEffectiveness(move: string, defenderSpecies: string): Effect
       }
       mult *= 2 ** ops.getEffectiveness(m.type, dt);
     }
-    const label = effLabel(mult);
-    const text = mult === 0 ? 'immune' : mult > 1 ? `super effective (${label})` : mult < 1 ? `resisted (${label})` : `neutral (1x)`;
-    return { mult, label, text };
+    return { mult, label: effLabel(mult), text: effText(mult) };
   } catch {
     return null;
   }
