@@ -7,10 +7,13 @@ import {
   applyWorkspace,
   deriveWorkspace,
   emptyStore,
+  exportMatch,
+  importMatchBundle,
   loadStore,
   matchStanding,
   standingLabel,
   teamById,
+  type MatchBundle,
   type ScoutingStore,
 } from './store';
 import { TournamentNav } from './TournamentNav';
@@ -37,6 +40,7 @@ export function App() {
   const [store, setStore] = useState<ScoutingStore>(load);
   const [tab, setTab] = useState<Tab>('teams');
   const fileRef = useRef<HTMLInputElement>(null);
+  const matchFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     localStorage.setItem(STORE_KEY, JSON.stringify(store));
@@ -50,18 +54,30 @@ export function App() {
   const game = activeGame(store);
   const standing = match ? matchStanding(match) : undefined;
 
-  const saveFile = () => {
-    const blob = new Blob([JSON.stringify(store, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    // "Tournament - Round - P1 vs P2.json" (labels the active context; the file holds the whole store)
+  // "Tournament - Round - P1 vs P2" — labels both the whole-store and the per-match files.
+  const contextLabel = () => {
     const p1 = teamById(t, match?.teamAId ?? '')?.player ?? ws.sideA.player;
     const p2 = teamById(t, match?.teamBId ?? '')?.player ?? ws.sideB.player;
     const label = [t?.name, match?.round, `${p1} vs ${p2}`].filter(Boolean).join(' - ');
-    a.download = `${(label || 'tournament').replace(/[/\\:*?"<>|]/g, '').replace(/\s+/g, ' ').trim()}.json`;
+    return (label || 'tournament').replace(/[/\\:*?"<>|]/g, '').replace(/\s+/g, ' ').trim();
+  };
+
+  const download = (name: string, data: unknown) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const saveFile = () => download(`${contextLabel()}.json`, store); // whole store
+
+  const exportMatchFile = () => {
+    const bundle = exportMatch(store);
+    if (!bundle) return;
+    download(`${contextLabel()} (match).json`, bundle); // just this set + its two teams
   };
 
   const loadFile = (file: File) => {
@@ -72,6 +88,19 @@ export function App() {
         setStore(loadStore(raw, raw)); // accepts a tournament store OR a legacy single-game workspace
       } catch (e) {
         alert(`Could not load: ${(e as Error).message}`);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const importMatchFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const bundle = JSON.parse(String(reader.result)) as MatchBundle;
+        setStore(importMatchBundle(store, bundle)); // merges, never overwrites
+      } catch (e) {
+        alert(`Could not import match: ${(e as Error).message}`);
       }
     };
     reader.readAsText(file);
@@ -108,8 +137,21 @@ export function App() {
           </button>
         ))}
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-          <button onClick={saveFile} title="Download this whole tournament as a file">⬇ Save</button>
-          <button onClick={() => fileRef.current?.click()} title="Load a saved tournament (or legacy transcription) to edit">⬆ Load</button>
+          <button onClick={exportMatchFile} title="Export just this match (set + its two teams) to share/back up">⤓ Match</button>
+          <button onClick={() => matchFileRef.current?.click()} title="Import a match file — merged in, nothing is overwritten">⤒ Match</button>
+          <input
+            ref={matchFileRef}
+            type="file"
+            accept="application/json,.json"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) importMatchFile(f);
+              e.target.value = '';
+            }}
+          />
+          <button onClick={saveFile} title="Download the whole store (all tournaments) as a backup">⬇ Save all</button>
+          <button onClick={() => fileRef.current?.click()} title="Load a whole store (or legacy transcription) — REPLACES everything">⬆ Load all</button>
           <input
             ref={fileRef}
             type="file"

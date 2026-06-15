@@ -415,6 +415,119 @@ export function deleteGame(store: ScoutingStore, gameId: string): ScoutingStore 
   };
 }
 
+// ── per-match ("battle") export / import (merge, never overwrite) ──────────────
+
+export interface MatchBundle {
+  kind: 'vgc-match';
+  version: 1;
+  tournament: { name: string; date: string; format: string };
+  match: Match;
+  /** the two teams the match references, so the bundle is self-contained */
+  teams: TournamentTeam[];
+}
+
+/** Bundle the active match + its two teams for sharing/backup of a single set. */
+export function exportMatch(store: ScoutingStore): MatchBundle | null {
+  const t = activeTournament(store);
+  const m = activeMatch(store);
+  if (!t || !m) return null;
+  const teams = [teamById(t, m.teamAId), teamById(t, m.teamBId)].filter((x): x is TournamentTeam => !!x);
+  return { kind: 'vgc-match', version: 1, tournament: { name: t.name, date: t.date, format: t.format }, match: m, teams };
+}
+
+/** Rewrite every mon-id reference in an event through `map` (unmapped strings pass through). */
+function remapEventIds(event: MatchEvent, map: Map<string, string>): MatchEvent {
+  const o = { ...(event as unknown as Record<string, unknown>) };
+  for (const k of Object.keys(o)) {
+    const v = o[k];
+    if (typeof v === 'string' && map.has(v)) o[k] = map.get(v);
+    else if (Array.isArray(v)) o[k] = v.map((x) => (typeof x === 'string' && map.has(x) ? map.get(x) : x));
+  }
+  return o as unknown as MatchEvent;
+}
+
+const speciesSeq = (team: TournamentTeam): string => team.mons.map((m) => m.parsed.species).join('|');
+
+/**
+ * Merge a match bundle into the store WITHOUT overwriting anything. The bundle is
+ * added to the tournament with a matching name (or a new one). Team ids and every
+ * mon-id reference are remapped so there can be no collision; a bundle team that
+ * matches an existing team (same player + same roster) is REUSED so re-imported
+ * battles of one tournament still aggregate in the solver.
+ */
+export function importMatchBundle(store: ScoutingStore, bundle: MatchBundle): ScoutingStore {
+  if (!bundle || bundle.kind !== 'vgc-match' || !bundle.match || !Array.isArray(bundle.teams)) {
+    throw new Error('not a match (battle) file');
+  }
+  const created = !store.tournaments.some((t) => t.name === bundle.tournament.name);
+  const target: Tournament =
+    store.tournaments.find((t) => t.name === bundle.tournament.name) ?? {
+      tournamentId: uid('t'),
+      name: bundle.tournament.name || 'Imported',
+      date: bundle.tournament.date || '',
+      format: bundle.tournament.format || 'Champions Reg M-A',
+      teams: [],
+      matches: [],
+    };
+
+  const teamIdMap = new Map<string, string>();
+  const monIdMap = new Map<string, string>();
+  let teams = [...target.teams];
+  for (const bt of bundle.teams) {
+    const existing = target.teams.find((t) => t.player === bt.player && speciesSeq(t) === speciesSeq(bt));
+    if (existing) {
+      teamIdMap.set(bt.teamId, existing.teamId);
+      bt.mons.forEach((m, i) => {
+        const em = existing.mons[i];
+        if (em) monIdMap.set(m.monId, em.monId);
+      });
+    } else {
+      const newTeamId = uid('tm');
+      teamIdMap.set(bt.teamId, newTeamId);
+      const mons = bt.mons.map((m) => {
+        const newMonId = `${newTeamId}${m.monId.slice(bt.teamId.length)}`;
+        monIdMap.set(m.monId, newMonId);
+        return { ...m, monId: newMonId };
+      });
+      teams = [...teams, { teamId: newTeamId, player: bt.player, rawPaste: bt.rawPaste, mons }];
+    }
+  }
+
+  const bm = bundle.match;
+  const teamAId = teamIdMap.get(bm.teamAId);
+  const teamBId = teamIdMap.get(bm.teamBId);
+  if (!teamAId || !teamBId) throw new Error('corrupt match file: a side references a team not in the bundle');
+
+  const games: Game[] = bm.games.map((g) => ({
+    gameId: uid('g'),
+    gameNumber: g.gameNumber,
+    leadsA: g.leadsA.map((id) => monIdMap.get(id) ?? id),
+    leadsB: g.leadsB.map((id) => monIdMap.get(id) ?? id),
+    events: g.events.map((e) => remapEventIds(e, monIdMap)),
+    ...(g.result ? { result: g.result } : {}),
+  }));
+  const match: Match = {
+    matchId: uid('m'),
+    round: bm.round,
+    bestOf: bm.bestOf,
+    teamAId,
+    teamBId,
+    games,
+    ...(bm.forfeitWinner ? { forfeitWinner: bm.forfeitWinner } : {}),
+  };
+
+  const nextTournament: Tournament = { ...target, teams, matches: [...target.matches, match] };
+  const tournaments = created
+    ? [...store.tournaments, nextTournament]
+    : store.tournaments.map((t) => (t.tournamentId === nextTournament.tournamentId ? nextTournament : t));
+  return {
+    tournaments,
+    activeTournamentId: nextTournament.tournamentId,
+    activeMatchId: match.matchId,
+    activeGameId: games[0]?.gameId ?? '',
+  };
+}
+
 // ── tournament-wide solve (aggregate every game per opponent) ──────────────────
 
 /** All games' clean hits feed ONE solve per team; returns each team's report. */

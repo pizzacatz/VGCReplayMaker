@@ -5,8 +5,11 @@ import {
   applyWorkspace,
   deriveWorkspace,
   emptyStore,
+  exportMatch,
+  importMatchBundle,
   matchStanding,
   moveGame,
+  renameTournament,
   setMatchField,
   standingLabel,
   storeFromLegacyWorkspace,
@@ -197,6 +200,78 @@ describe('setMatchField', () => {
     expect(store.tournaments[0]!.matches[0]!.forfeitWinner).toBe('B');
     store = setMatchField(store, { forfeitWinner: undefined });
     expect(store.tournaments[0]!.matches[0]!.forfeitWinner).toBeUndefined();
+  });
+});
+
+describe('per-match (battle) export / import — merge, never overwrite', () => {
+  const mon = (id: string, species: string): MonEntry => ({
+    monId: id,
+    parsed: { species, level: 50, moves: [], alignment: 'neutral', spreadKnown: false, flags: [] },
+    observedMaxHp: 183,
+  });
+
+  // a store whose active match has named players, a roster on each side, and a transcribed game
+  const seeded = (): ReturnType<typeof emptyStore> => {
+    let s = renameTournament(emptyStore(), 'Regional A'); // distinct name from a fresh store's default
+    const ws = deriveWorkspace(s);
+    s = applyWorkspace(s, {
+      ...ws,
+      round: 'Round 7',
+      sideA: { ...ws.sideA, player: 'Alice', mons: [mon('A0', 'Garchomp')], leads: ['A0'] },
+      sideB: { ...ws.sideB, player: 'Bob', mons: [mon('B0', 'Incineroar')], leads: ['B0'] },
+      events: [
+        { eventId: 'e1', seq: 1, turn: 1, type: 'move_used', user: 'A0', move: 'Earthquake', targets: ['B0'] },
+        { eventId: 'e2', seq: 2, turn: 1, type: 'damage', attacker: 'A0', defender: 'B0', move: 'Earthquake', hpBefore: 175, hpAfter: 100, crit: false, status: 'clean' },
+      ],
+      result: { winner: 'A', reason: 'ko' },
+    });
+    return s;
+  };
+
+  it('exports the active match with both teams, self-contained', () => {
+    const bundle = exportMatch(seeded())!;
+    expect(bundle.kind).toBe('vgc-match');
+    expect(bundle.teams.map((t) => t.player).sort()).toEqual(['Alice', 'Bob']);
+    expect(bundle.match.round).toBe('Round 7');
+  });
+
+  it('importing into a DIFFERENT store adds the match without overwriting existing data', () => {
+    const bundle = exportMatch(seeded())!;
+    const other = emptyStore(); // a separate store with its own (empty) tournament
+    const otherTournamentCount = other.tournaments.length;
+    const merged = importMatchBundle(other, bundle);
+    expect(merged.tournaments.length).toBe(otherTournamentCount + 1); // new tournament added, old kept
+    const imported = merged.tournaments.find((t) => t.name === 'Regional A' && t.matches.some((m) => m.round === 'Round 7'));
+    expect(imported).toBeTruthy();
+  });
+
+  it('remaps ids so an imported game reconstructs and references no original ids', () => {
+    const bundle = exportMatch(seeded())!;
+    const merged = importMatchBundle(emptyStore(), bundle);
+    const m = merged.tournaments.flatMap((t) => t.matches).find((x) => x.round === 'Round 7')!;
+    const g = m.games[0]!;
+    // events were remapped off the original A0/B0 ids onto the new team prefixes
+    const ids = g.events.flatMap((e) => Object.values(e as unknown as Record<string, unknown>).flatMap((v) => (Array.isArray(v) ? v : [v])));
+    expect(ids).not.toContain('A0');
+    expect(ids).not.toContain('B0');
+    // and the derived workspace for that imported game is internally consistent
+    const ws = deriveWorkspace({ ...merged, activeMatchId: m.matchId, activeGameId: g.gameId });
+    expect(ws.events).toHaveLength(2);
+    expect(ws.sideA.mons[0]!.monId).toBe(ws.sideA.leads![0]); // lead id matches the remapped roster id
+  });
+
+  it('re-importing a battle of the same tournament reuses the matching team (aggregation-friendly)', () => {
+    const bundle = exportMatch(seeded())!;
+    let s = importMatchBundle(emptyStore(), bundle); // creates tournament "Regional A" with Alice+Bob
+    const teamsAfterFirst = s.tournaments.find((t) => t.name === 'Regional A')!.teams.length;
+    s = importMatchBundle(s, bundle); // same tournament name + same rosters → teams reused, not duplicated
+    const t = s.tournaments.find((x) => x.name === 'Regional A')!;
+    expect(t.matches).toHaveLength(2); // both matches present
+    expect(t.teams.length).toBe(teamsAfterFirst); // teams NOT duplicated
+  });
+
+  it('rejects a non-match file', () => {
+    expect(() => importMatchBundle(emptyStore(), { kind: 'nope' } as never)).toThrow();
   });
 });
 
