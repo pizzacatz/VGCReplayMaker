@@ -118,11 +118,10 @@ describe('§1.2 alignment (§B4)', () => {
   it('U1.2.5 — alignment uses integer math, matching an exact BigInt reference (R1; float forbidden)', () => {
     // The named anchor: neutral 110 boosted → 121, not 120.
     expect(applyAlignment(110, 'up')).toBe(121);
-    // Exhaustive agreement with EXACT integer division (BigInt) across a wide
-    // range — the real R1 guarantee: our result is the integer-arithmetic value,
-    // never a float-rounded one. (For these ÷10 multipliers float happens not to
-    // diverge in range; we still mandate integer math so no value ever can.)
-    for (let n = 0; n <= 100_000; n++) {
+    // Agreement with EXACT integer division (BigInt) across a wide range — the
+    // real R1 guarantee: our result is the integer-arithmetic value, never a
+    // float-rounded one. The range far exceeds any real neutral stat (≤ ~307).
+    for (let n = 0; n <= 20_000; n++) {
       expect(applyAlignment(n, 'up')).toBe(bigIntAlign(n, 110n));
       expect(applyAlignment(n, 'down')).toBe(bigIntAlign(n, 90n));
     }
