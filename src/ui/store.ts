@@ -646,6 +646,8 @@ export function solveTournament(t: Tournament): Map<string, InstanceReport> {
         ...(f.trickRoom !== undefined ? { trickRoom: f.trickRoom } : {}),
         ...(f.firstSpecies ? { firstSpecies: f.firstSpecies } : {}),
         ...(f.secondSpecies ? { secondSpecies: f.secondSpecies } : {}),
+        ...(f.firstControl ? { firstControl: f.firstControl } : {}),
+        ...(f.secondControl ? { secondControl: f.secondControl } : {}),
       }));
       db.addGame({
         gameId: game.gameId,

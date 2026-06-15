@@ -9,7 +9,7 @@
 
 import { toID } from '@smogon/calc';
 import type { Gen, HitContext, MonSpec } from '../engine';
-import type { SolverHit } from '../solver';
+import type { SolverHit, SpeedControl } from '../solver';
 import type { MatchEvent, MatchLog, Side } from '../log';
 
 /**
@@ -102,6 +102,9 @@ export interface ExtractedSpeedFact {
   /** Mega forme of each mover at the time (changes its Speed base), if any. */
   firstSpecies?: string;
   secondSpecies?: string;
+  /** known speed-control multiplier on each mover (Tailwind ×2, paralysis ×0.5, Choice Scarf ×1.5). */
+  firstControl?: SpeedControl;
+  secondControl?: SpeedControl;
 }
 
 export interface SpeedExtraction {
@@ -114,9 +117,11 @@ export interface SpeedExtraction {
  * Derive speed facts from move order within each turn (Constraint §4). SOUND by
  * construction:
  *  - only SAME-priority-bracket orderings inform Speed (the mandatory guard);
- *  - an ordering is emitted only when the effective-speed comparison is exact —
- *    i.e. no un-modelled speed-control magnitude (Tailwind / paralysis / Choice
- *    Scarf) on either mover. Those orderings are SKIPPED, not guessed wrong;
+ *  - a KNOWN speed-control magnitude is modelled, not discarded: Tailwind (×2),
+ *    paralysis (×0.5), and Choice Scarf (×1.5, known from the open sheet) are
+ *    emitted as the mover's control. Only genuinely un-pinnable cases are SKIPPED:
+ *    an UNSHEETED mover (could hold an unknown Choice item), or STACKED modifiers
+ *    on one mover (a single num/den floor can't reproduce the chained flooring);
  *  - Trick Room only reverses the comparison (no magnitude change), so TR turns
  *    are emitted with the flag.
  */
@@ -141,9 +146,10 @@ export function extractSpeedFacts(log: MatchLog, gen: Gen, specs: Map<string, Mo
         const a = moves[i]!;
         const b = moves[j]!;
         if (priorityOf(a.move) !== priorityOf(b.move)) continue; // §4 guard: different bracket → no info
-        const reason = controlReason(log, gen, specs, a.user, b.user, a.seq);
-        if (reason) {
-          skipped.push({ turn, first: a.user, second: b.user, reason });
+        const ca = speedControl(log, specs, a.user, a.seq);
+        const cb = speedControl(log, specs, b.user, a.seq);
+        if (ca.skip || cb.skip) {
+          skipped.push({ turn, first: a.user, second: b.user, reason: ca.reason ?? cb.reason ?? 'unknown' });
           continue;
         }
         const fForme = megaFormeAt(log, a.user, a.seq);
@@ -155,28 +161,29 @@ export function extractSpeedFacts(log: MatchLog, gen: Gen, specs: Map<string, Mo
           ...(isActiveAt(log, 'Trick Room', undefined, a.seq) ? { trickRoom: true } : {}),
           ...(fForme ? { firstSpecies: fForme } : {}),
           ...(sForme ? { secondSpecies: sForme } : {}),
+          ...(ca.control ? { firstControl: ca.control } : {}),
+          ...(cb.control ? { secondControl: cb.control } : {}),
         });
       }
     }
   }
   return { facts, skipped };
 
-  function controlReason(
+  /** A mover's known speed-control multiplier, or a skip reason when it can't be pinned. */
+  function speedControl(
     l: MatchLog,
-    g: Gen,
     sp: Map<string, MonSpec>,
-    first: string,
-    second: string,
+    mon: string,
     seq: number,
-  ): string | null {
-    for (const mon of [first, second]) {
-      if (isActiveAt(l, 'Tailwind', sideOf(mon), seq)) return `Tailwind active on side ${sideOf(mon)}`;
-      if (isStatusAt(l, mon, 'par', seq)) return `${mon} paralyzed`;
-      const item = sp.get(mon)?.item;
-      if (item === 'Choice Scarf') return `${mon} holds Choice Scarf`;
-      if (!sp.has(mon)) return `${mon} unsheeted (cannot rule out a Choice item)`;
-    }
-    return null;
+  ): { control?: SpeedControl; skip: boolean; reason?: string } {
+    if (!sp.has(mon)) return { skip: true, reason: `${mon} unsheeted (cannot rule out a Choice item)` };
+    const mods: SpeedControl[] = [];
+    if (isActiveAt(l, 'Tailwind', sideOf(mon), seq)) mods.push({ num: 2, den: 1 });
+    if (isStatusAt(l, mon, 'par', seq)) mods.push({ num: 1, den: 2 });
+    if (sp.get(mon)?.item === 'Choice Scarf') mods.push({ num: 3, den: 2 });
+    if (mods.length === 0) return { skip: false };
+    if (mods.length === 1) return { control: mods[0]!, skip: false };
+    return { skip: true, reason: `${mon} has stacked speed modifiers (single floor can't reproduce chained flooring)` };
   }
 }
 

@@ -113,16 +113,29 @@ describe('§4 — sound speed-fact extraction from move order', () => {
     expect(facts[0]).toMatchObject({ first: 'inc', second: 'gar', samePriorityBracket: true });
   });
 
-  it('skips (does not fabricate) an order when Tailwind is active', () => {
+  it('models Tailwind (×2) on the mover rather than discarding the order', () => {
     const log = baseLog([
       { eventId: 'tw', seq: 1, turn: 1, type: 'field_change', field: 'Tailwind', action: 'set', side: 'A' },
       { eventId: 't1', seq: 2, turn: 1, type: 'turn_start' },
       { eventId: 'c', seq: 3, turn: 1, type: 'move_used', user: 'inc', move: 'Flare Blitz', targets: ['gar'] },
       { eventId: 'd', seq: 4, turn: 1, type: 'move_used', user: 'gar', move: 'Earthquake', targets: ['inc'] },
     ]);
-    const { facts, skipped } = extractSpeedFacts(log, gen, specs);
+    const { facts } = extractSpeedFacts(log, gen, specs);
+    expect(facts).toHaveLength(1); // the open sheet pins the magnitude → usable, not skipped
+    expect(facts[0]).toMatchObject({ first: 'inc', second: 'gar', firstControl: { num: 2, den: 1 } });
+    expect(facts[0]!.secondControl).toBeUndefined(); // gar (side B) has no Tailwind
+  });
+
+  it('still skips an order when a mover is UNSHEETED (could hold a Choice Scarf)', () => {
+    const log = baseLog([
+      { eventId: 't1', seq: 1, turn: 1, type: 'turn_start' },
+      { eventId: 'c', seq: 2, turn: 1, type: 'move_used', user: 'inc', move: 'Flare Blitz', targets: ['gar'] },
+      { eventId: 'd', seq: 3, turn: 1, type: 'move_used', user: 'gar', move: 'Earthquake', targets: ['inc'] },
+    ]);
+    const partial = new Map<string, MonSpec>([['inc', incSpec]]); // gar unsheeted
+    const { facts, skipped } = extractSpeedFacts(log, gen, partial);
     expect(facts).toHaveLength(0);
-    expect(skipped.some((s) => /Tailwind/i.test(s.reason))).toBe(true);
+    expect(skipped.some((s) => /unsheeted/i.test(s.reason))).toBe(true);
   });
 });
 
