@@ -39,9 +39,22 @@ function boostsAt(log: MatchLog, monId: string, seq: number): Record<string, num
   return boosts;
 }
 
+/** The Paradox boost (Protosynthesis/Quark Drive) stat active on a mon, lost on switch-out. */
+function paradoxBoostAt(log: MatchLog, monId: string, seq: number): string | undefined {
+  let stat: string | undefined;
+  for (const ev of [...log.events].sort((a, b) => a.seq - b.seq)) {
+    if (ev.seq >= seq) break;
+    if (ev.type === 'item_or_ability_event' && ev.mon === monId && ev.kind === 'paradox') stat = ev.name;
+    if (ev.type === 'switch' && ev.out === monId) stat = undefined;
+  }
+  return stat;
+}
+
 /** The reconstructed field/boosts/burn at the moment of a hit (always Doubles). */
 function contextAt(log: MatchLog, attacker: string, defender: string, seq: number): HitContext {
   const dSide = sideOfMon(log, defender);
+  const aBoosted = paradoxBoostAt(log, attacker, seq);
+  const dBoosted = paradoxBoostAt(log, defender, seq);
   const weather = WEATHERS.find((w) => isActiveAt(log, w, undefined, seq));
   let terrain: string | undefined;
   for (const [field, calc] of Object.entries(TERRAINS)) if (isActiveAt(log, field, undefined, seq)) terrain = calc;
@@ -56,6 +69,8 @@ function contextAt(log: MatchLog, attacker: string, defender: string, seq: numbe
     ...(Object.keys(aBoosts).length ? { attackerBoosts: aBoosts } : {}),
     ...(Object.keys(dBoosts).length ? { defenderBoosts: dBoosts } : {}),
     ...(isStatusAt(log, attacker, 'brn', seq) ? { attackerBurned: true } : {}),
+    ...(aBoosted ? { attackerBoostedStat: aBoosted } : {}),
+    ...(dBoosted ? { defenderBoostedStat: dBoosted } : {}),
   };
 }
 

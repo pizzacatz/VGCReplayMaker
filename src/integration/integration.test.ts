@@ -235,3 +235,31 @@ describe('Speed-dependent moves are excluded from the clean factor set', () => {
     expect(hits.map((h) => h.move)).toEqual(['Earthquake']); // Gyro Ball excluded, the normal hit kept
   });
 });
+
+describe('Paradox boost (Protosynthesis/Quark Drive) in the damage factor', () => {
+  it('a hit dealt under a recorded Atk Paradox boost solves with the ×1.3, not without it', () => {
+    const ironHands: MonSpec = { species: 'Iron Hands', alignment: 'neutral' };
+    // ground truth: Iron Hands Atk SP 8, Quark Drive boosting Atk, into Garchomp.
+    const rolls = predictHit(gen, { attacker: ironHands, attackerSp: 8, defender: garSpec, defenderSp: 0, move: 'Drain Punch', context: { attackerBoostedStat: 'atk' } }).rolls;
+    const observed = rolls[7]!;
+    const log: MatchLog = {
+      matchId: 'qd', format: 'Champions Reg M-A',
+      sideA: { player: 'W', mons: [{ monId: 'ih', species: 'Iron Hands', maxHp: 229 }] },
+      sideB: { player: 'O', mons: [{ monId: 'gar', species: 'Garchomp', maxHp: 183 }] },
+      leads: [{ side: 'A', position: 0, monId: 'ih' }, { side: 'B', position: 0, monId: 'gar' }],
+      events: [
+        { eventId: 'qd', seq: 1, turn: 1, type: 'item_or_ability_event', mon: 'ih', kind: 'paradox', name: 'atk' },
+        { eventId: 'm', seq: 2, turn: 1, type: 'move_used', user: 'ih', move: 'Drain Punch', targets: ['gar'] },
+        { eventId: 'd', seq: 3, turn: 1, type: 'damage', attacker: 'ih', move: 'Drain Punch', defender: 'gar', hpBefore: 183, hpAfter: 183 - observed, crit: false, status: 'clean' },
+      ],
+    };
+    const hit = extractCleanHits(log)[0]!;
+    expect(hit.context?.attackerBoostedStat).toBe('atk'); // reconstructed from the log
+    const sys = (ctx: boolean) => new ConstraintSystem(gen, [
+      { id: 'ih', spec: ironHands, observedMaxHp: 229 },
+      { id: 'gar', spec: garSpec, observedMaxHp: 183 },
+    ], [{ attackerId: 'ih', defenderId: 'gar', move: 'Drain Punch', observedDamage: observed, ...(ctx ? { context: { attackerBoostedStat: 'atk' } } : {}) }]);
+    expect(sys(true).propagate().domains.get('ih')!.get('atk')!).toContain(8); // boost explains it at low SP
+    expect(sys(false).propagate().domains.get('ih')!.get('atk')!).not.toContain(8); // ignoring it demands more
+  });
+});

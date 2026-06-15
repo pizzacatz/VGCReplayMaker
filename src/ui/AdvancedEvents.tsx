@@ -2,11 +2,12 @@ import { useState } from 'react';
 import type { MatchEvent } from '../log';
 import { allMons, currentBoard, nextEventId, type Workspace } from './model';
 
-type AdvType = 'status_applied' | 'status_cured' | 'stat_stage_change' | 'field_change' | 'heal' | 'passive_hp_change' | 'faint' | 'flinch';
+type AdvType = 'status_applied' | 'status_cured' | 'stat_stage_change' | 'field_change' | 'heal' | 'passive_hp_change' | 'faint' | 'flinch' | 'paradox';
 
 const LABELS: Array<[AdvType, string]> = [
   ['flinch', 'Flinch (reveals action order)'],
   ['stat_stage_change', 'Stat stage (boost/drop)'],
+  ['paradox', 'Paradox boost (Protosynthesis/Quark Drive)'],
   ['field_change', 'Field (weather/terrain/screen)'],
   ['status_applied', 'Status applied'],
   ['status_cured', 'Status cured'],
@@ -44,6 +45,7 @@ export function AdvancedEvents({ ws, setWs, currentTurn }: { ws: Workspace; setW
       case 'passive_hp_change': if (mon) ev = { ...base, type, target: mon, source, hpBefore, hpAfter: Number(hpAfter) }; break;
       case 'faint': if (mon) ev = { ...base, type, target: mon }; break;
       case 'flinch': if (mon) ev = { ...base, type: 'random_outcome', mon, eventKind: 'flinch', outcome: 'yes' }; break;
+      case 'paradox': if (mon) ev = { ...base, type: 'item_or_ability_event', mon, kind: 'paradox', name: stat }; break; // boosts `stat` ×1.3 (×1.5 Spe)
     }
     if (ev) setWs({ ...ws, events: [...ws.events, ev] });
   };
@@ -77,6 +79,12 @@ export function AdvancedEvents({ ws, setWs, currentTurn }: { ws: Workspace; setW
       {(type === 'status_applied' || type === 'status_cured') && (
         <div className="field"><label>Status</label>
           <select value={statusName} onChange={(e) => setStatusName(e.target.value)}>{['brn', 'par', 'psn', 'tox', 'slp', 'frz'].map((s) => <option key={s}>{s}</option>)}</select>
+        </div>
+      )}
+      {type === 'paradox' && (
+        <div className="field"><label>Boosted stat</label>
+          <select value={stat} onChange={(e) => setStat(e.target.value)}>{['atk', 'def', 'spa', 'spd', 'spe'].map((s) => <option key={s}>{s}</option>)}</select>
+          <span className="muted" style={{ fontSize: 11 }}>the stat the game announced (highest); ×1.3, or ×1.5 for Speed</span>
         </div>
       )}
       {type === 'stat_stage_change' && (

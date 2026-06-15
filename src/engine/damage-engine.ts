@@ -53,6 +53,9 @@ export interface HitContext {
   defenderBoosts?: Record<string, number> | undefined;
   /** attacker burned → physical attack halved */
   attackerBurned?: boolean | undefined;
+  /** Paradox boost (Protosynthesis/Quark Drive) active stat — ×1.3 (×1.5 Speed) on that mon */
+  attackerBoostedStat?: string | undefined;
+  defenderBoostedStat?: string | undefined;
 }
 
 export interface HitInput {
@@ -142,7 +145,7 @@ function buildMon(
   spec: MonSpec,
   statKey: Exclude<StatKey, 'hp'>,
   sp: number,
-  extra?: { boosts?: Record<string, number> | undefined; status?: string | undefined },
+  extra?: { boosts?: Record<string, number> | undefined; status?: string | undefined; boostedStat?: string | undefined },
 ): Pokemon {
   const base = baseStat(gen, spec.species, statKey);
   const role = roleOf(spec.alignment, statKey);
@@ -155,6 +158,7 @@ function buildMon(
     ...(spec.ability ? { ability: spec.ability } : {}),
     ...(extra?.boosts ? { boosts: extra.boosts } : {}),
     ...(extra?.status ? { status: extra.status as never } : {}),
+    ...(extra?.boostedStat ? { boostedStat: extra.boostedStat as never } : {}),
   });
   const expected = spToFinal(base, sp, role);
   const got = mon.stats[statKey];
@@ -199,9 +203,11 @@ export function predictHit(
   const attacker = buildMon(gen, input.attacker, offensiveStat, input.attackerSp, {
     ...(hctx?.attackerBoosts ? { boosts: hctx.attackerBoosts } : {}),
     ...(hctx?.attackerBurned ? { status: 'brn' } : {}),
+    ...(hctx?.attackerBoostedStat ? { boostedStat: hctx.attackerBoostedStat } : {}),
   });
   const defender = buildMon(gen, input.defender, defensiveStat, input.defenderSp, {
     ...(hctx?.defenderBoosts ? { boosts: hctx.defenderBoosts } : {}),
+    ...(hctx?.defenderBoostedStat ? { boostedStat: hctx.defenderBoostedStat } : {}),
   });
 
   // Champions is always Doubles; the field is applied only for real (reconstructed)
@@ -267,9 +273,11 @@ export function predictMultiHit(
   const attacker = buildMon(gen, input.attacker, offensiveStat, input.attackerSp, {
     ...(hctx?.attackerBoosts ? { boosts: hctx.attackerBoosts } : {}),
     ...(hctx?.attackerBurned ? { status: 'brn' } : {}),
+    ...(hctx?.attackerBoostedStat ? { boostedStat: hctx.attackerBoostedStat } : {}),
   });
   const defender = buildMon(gen, input.defender, defensiveStat, input.defenderSp, {
     ...(hctx?.defenderBoosts ? { boosts: hctx.defenderBoosts } : {}),
+    ...(hctx?.defenderBoostedStat ? { boostedStat: hctx.defenderBoostedStat } : {}),
   });
   const field = hctx
     ? new Field({

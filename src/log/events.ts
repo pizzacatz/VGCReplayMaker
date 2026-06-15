@@ -106,7 +106,7 @@ export interface FieldChangeEvent extends BaseEvent {
 export interface ItemOrAbilityEvent extends BaseEvent {
   type: 'item_or_ability_event';
   mon: string;
-  kind: 'item' | 'enditem' | 'ability' | 'activate';
+  kind: 'item' | 'enditem' | 'ability' | 'activate' | 'paradox';
   name: string;
   effect?: string;
 }
