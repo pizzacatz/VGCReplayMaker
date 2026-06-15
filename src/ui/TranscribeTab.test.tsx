@@ -150,6 +150,13 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText(/→99/)).toBeTruthy(); // event log reflects the edit
   });
 
+  it('the forfeit button records a forfeit result for the opponent', () => {
+    const { getByText, getByDisplayValue } = render(<Harness />);
+    fireEvent.click(getByText('⚑ You')); // "You" forfeits → Opp wins
+    expect(getByDisplayValue('Opp wins')).toBeTruthy(); // winner = side B
+    expect(getByDisplayValue('by forfeit')).toBeTruthy(); // reason = forfeit
+  });
+
   it('the Faint button marks a Pokémon fainted', () => {
     const { getAllByText, getByText } = render(<Harness />);
     fireEvent.click(getAllByText('Incineroar').at(-1)!);

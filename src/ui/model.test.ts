@@ -155,6 +155,30 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
     expect(sun[0]).toMatchObject({ type: 'field_change', field: 'Sun', action: 'set' });
   });
 
+  it('Intimidate respects the foe’s ability: Defiant (+2 Atk), Guard Dog (+1), Clear Body / immunity (none)', () => {
+    const inc = entry('A', 0, 'Incineroar');
+    inc.parsed.ability = 'Intimidate';
+    const make = (ability?: string) => {
+      const kg = entry('B', 0, 'Kingambit');
+      if (ability) kg.parsed.ability = ability;
+      const ws: Workspace = {
+        sideA: { player: 'A', rawPaste: '', mons: [inc], leads: ['A0'] },
+        sideB: { player: 'B', rawPaste: '', mons: [kg], leads: ['B0'] },
+        events: [],
+      };
+      const board = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+      return entryEffectEvents(ws, 'A0', 'Intimidate', board, true)
+        .map((b, i) => b(i + 1, 1))
+        .filter((e): e is Extract<MatchEvent, { type: 'stat_stage_change' }> => e.type === 'stat_stage_change');
+    };
+    expect(make('Defiant').map((e) => [e.stat, e.stages, e.source])).toEqual([['atk', -1, 'Intimidate'], ['atk', 2, 'Defiant']]); // net +1 Kingambit
+    expect(make('Competitive').map((e) => [e.stat, e.stages])).toEqual([['atk', -1], ['spa', 2]]);
+    expect(make('Guard Dog').map((e) => [e.stat, e.stages, e.source])).toEqual([['atk', 1, 'Guard Dog']]);
+    expect(make('Clear Body')).toHaveLength(0); // drop blocked
+    expect(make('Inner Focus')).toHaveLength(0); // immune
+    expect(make(undefined).map((e) => e.stages)).toEqual([-1]); // plain Intimidate
+  });
+
   it('moveMakesContact reads the dex flag', () => {
     expect(moveMakesContact('Flare Blitz')).toBe(true);
     expect(moveMakesContact('Earthquake')).toBe(false);

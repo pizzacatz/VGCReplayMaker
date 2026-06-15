@@ -439,6 +439,10 @@ const TERRAIN_ABILITIES: Record<string, string> = {
   'Electric Surge': 'Electric Terrain', 'Hadron Engine': 'Electric Terrain',
   'Grassy Surge': 'Grassy Terrain', 'Psychic Surge': 'Psychic Terrain', 'Misty Surge': 'Misty Terrain',
 };
+/** Abilities that make a mon ignore Intimidate entirely (Gen 8+). */
+const INTIMIDATE_IMMUNE = new Set(['Inner Focus', 'Oblivious', 'Own Tempo', 'Scrappy']);
+/** Abilities that block the Attack drop (but aren't full Intimidate immunity). */
+const ATK_DROP_BLOCK = new Set(['Clear Body', 'White Smoke', 'Full Metal Body', 'Hyper Cutter']);
 
 export type EventBuilder = (seq: number, turn: number) => MatchEvent;
 
@@ -470,7 +474,17 @@ export function entryEffectEvents(ws: Workspace, monId: string, ability: string 
     const side = rosterSideOf(ws, monId);
     for (const foe of activeMonIds(board).filter((m) => m.side !== side && !m.fainted)) {
       const target = foe.monId;
+      const fa = monAbility(ws, target);
+      if (fa && INTIMIDATE_IMMUNE.has(fa)) continue; // Inner Focus / Oblivious / Own Tempo / Scrappy → no effect
+      if (fa === 'Guard Dog') { // reverses Intimidate into a +1 Attack boost
+        out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target, stat: 'atk', stages: 1, source: 'Guard Dog' }));
+        continue;
+      }
+      if (fa && ATK_DROP_BLOCK.has(fa)) continue; // Clear Body etc. → the drop is prevented
       out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target, stat: 'atk', stages: -1, source: 'Intimidate' }));
+      // The drop triggers a retaliation ability — Defiant (+2 Atk, e.g. Kingambit) / Competitive (+2 SpA).
+      if (fa === 'Defiant') out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target, stat: 'atk', stages: 2, source: 'Defiant' }));
+      else if (fa === 'Competitive') out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target, stat: 'spa', stages: 2, source: 'Competitive' }));
     }
   }
   const weather = WEATHER_ABILITIES[ability];

@@ -332,6 +332,21 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
               <option value="dq">by DQ</option>
             </select>
           )}
+          <span className="muted" style={{ fontSize: 12 }}>· forfeit:</span>
+          <button
+            title={`${ws.sideA.player} forfeits → ${ws.sideB.player} wins`}
+            onClick={() => setWs({ ...ws, result: { winner: 'B', reason: 'forfeit' } })}
+            style={ws.result?.reason === 'forfeit' && ws.result.winner === 'B' ? { borderColor: 'var(--bad)' } : undefined}
+          >
+            ⚑ {ws.sideA.player}
+          </button>
+          <button
+            title={`${ws.sideB.player} forfeits → ${ws.sideA.player} wins`}
+            onClick={() => setWs({ ...ws, result: { winner: 'A', reason: 'forfeit' } })}
+            style={ws.result?.reason === 'forfeit' && ws.result.winner === 'A' ? { borderColor: 'var(--bad)' } : undefined}
+          >
+            ⚑ {ws.sideB.player}
+          </button>
         </div>
 
         <Board actives={actives} actor={actor} onPick={pickActor} youName={ws.sideA.player} oppName={ws.sideB.player} />
@@ -487,6 +502,8 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
 /** The event log (drag-reorder + inline edit + delete). Reused in the recovery screen. */
 function EventLogColumn({ ws, setWs, highlightId }: { ws: Workspace; setWs: (w: Workspace) => void; highlightId?: string }) {
   const [editId, setEditId] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
   const reorderEvents = (fromId: string, toId: string) => {
     const sorted = [...ws.events].sort((a, b) => a.seq - b.seq);
     const from = sorted.findIndex((e) => e.eventId === fromId);
@@ -500,7 +517,7 @@ function EventLogColumn({ ws, setWs, highlightId }: { ws: Workspace; setWs: (w: 
     <div className="col panel">
       <h2>Event log ({ws.events.length})</h2>
       {ws.events.length === 0 && <p className="muted">No events yet. Set your leads above, then click a Pokémon to start.</p>}
-      {ws.events.length > 0 && <p className="muted" style={{ fontSize: 11 }}>drag ⠿ to reorder · click ✎ to edit</p>}
+      {ws.events.length > 0 && <p className="muted" style={{ fontSize: 11 }}>drag ⠿ to reorder — the blue line shows where it’ll drop · click ✎ to edit</p>}
       {[...ws.events].sort((a, b) => a.seq - b.seq).map((e) =>
         editId === e.eventId ? (
           <EventEditor
@@ -517,14 +534,34 @@ function EventLogColumn({ ws, setWs, highlightId }: { ws: Workspace; setWs: (w: 
           <div
             key={e.eventId}
             className="event"
-            style={highlightId === e.eventId ? { border: '1px solid var(--bad)', borderRadius: 4 } : undefined}
+            style={{
+              ...(highlightId === e.eventId ? { border: '1px solid var(--bad)', borderRadius: 4 } : {}),
+              ...(dragId === e.eventId ? { opacity: 0.4 } : {}),
+              // insertion line above the drop target (box-shadow → no layout shift)
+              ...(overId === e.eventId && dragId && dragId !== e.eventId ? { boxShadow: 'inset 0 3px 0 0 var(--accent)' } : {}),
+            }}
             draggable
-            onDragStart={(ev) => ev.dataTransfer.setData('text/plain', e.eventId)}
-            onDragOver={(ev) => ev.preventDefault()}
+            onDragStart={(ev) => {
+              setDragId(e.eventId);
+              ev.dataTransfer.setData('text/plain', e.eventId);
+              ev.dataTransfer.effectAllowed = 'move';
+            }}
+            onDragOver={(ev) => {
+              ev.preventDefault();
+              ev.dataTransfer.dropEffect = 'move';
+              if (overId !== e.eventId) setOverId(e.eventId);
+            }}
+            onDragLeave={() => setOverId((cur) => (cur === e.eventId ? null : cur))}
             onDrop={(ev) => {
               ev.preventDefault();
               const fromId = ev.dataTransfer.getData('text/plain');
               if (fromId) reorderEvents(fromId, e.eventId);
+              setDragId(null);
+              setOverId(null);
+            }}
+            onDragEnd={() => {
+              setDragId(null);
+              setOverId(null);
             }}
           >
             <span className="drag" title="drag to reorder" style={{ cursor: 'grab', color: 'var(--muted)' }}>⠿</span>
