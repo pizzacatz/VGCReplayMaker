@@ -42,6 +42,8 @@ export interface Game {
   events: MatchEvent[];
   /** the game's recorded outcome; absent = unplayed/in-progress */
   result?: GameResult;
+  /** when true, this game's hits are quarantined from the tournament solve (kept, not deleted) */
+  excludedFromSolve?: boolean;
 }
 
 export interface TournamentTeam {
@@ -387,6 +389,23 @@ export function selectGame(store: ScoutingStore, gameId: string): ScoutingStore 
   return { ...store, activeGameId: gameId };
 }
 
+/** Toggle whether a game's hits feed the tournament solve (quarantine without deleting). */
+export function toggleGameExcluded(store: ScoutingStore, gameId: string): ScoutingStore {
+  const t = activeTournament(store);
+  const match = activeMatch(store);
+  if (!t || !match) return store;
+  const games = match.games.map((g) => {
+    if (g.gameId !== gameId) return g;
+    if (g.excludedFromSolve) {
+      const { excludedFromSolve: _drop, ...rest } = g;
+      return rest;
+    }
+    return { ...g, excludedFromSolve: true };
+  });
+  const nextMatch: Match = { ...match, games };
+  return replaceTournament(store, { ...t, matches: t.matches.map((m) => (m.matchId === match.matchId ? nextMatch : m)) });
+}
+
 /** Move a game earlier (delta -1) or later (delta +1) in the set; gameNumbers follow position. */
 export function moveGame(store: ScoutingStore, gameId: string, delta: number): ScoutingStore {
   const t = activeTournament(store);
@@ -551,6 +570,7 @@ export function solveTournament(t: Tournament): Map<string, InstanceReport> {
 
   for (const match of t.matches) {
     for (const game of match.games) {
+      if (game.excludedFromSolve) continue; // quarantined — its hits don't feed the solve
       const teamA = teamById(t, match.teamAId);
       const teamB = teamById(t, match.teamBId);
       if (!teamA || !teamB) continue;

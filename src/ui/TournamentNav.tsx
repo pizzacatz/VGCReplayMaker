@@ -16,6 +16,7 @@ import {
   setMatchField,
   standingLabel,
   teamById,
+  toggleGameExcluded,
   winsNeeded,
   type Match,
   type ScoutingStore,
@@ -121,8 +122,16 @@ export function TournamentNav({ store, setStore }: { store: ScoutingStore; setSt
                 className={g.gameId === game.gameId ? 'active' : ''}
                 onClick={() => setStore(selectGame(store, g.gameId))}
                 title={g.result ? `won by ${g.result.reason}` : 'in progress'}
+                style={g.excludedFromSolve ? { opacity: 0.5, textDecoration: 'line-through' } : undefined}
               >
                 Game {g.gameNumber} <span className="muted">· {mark}</span>
+              </button>
+              <button
+                onClick={() => setStore(toggleGameExcluded(store, g.gameId))}
+                title={g.excludedFromSolve ? 'excluded from the solve — click to include' : 'exclude this game from the solve (kept, not deleted)'}
+                style={{ padding: '2px 5px', color: g.excludedFromSolve ? 'var(--warn)' : 'var(--muted)' }}
+              >
+                {g.excludedFromSolve ? '⊘' : '⊙'}
               </button>
               {match.games.length > 1 && (
                 <button

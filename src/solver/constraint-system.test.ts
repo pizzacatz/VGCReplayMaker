@@ -187,3 +187,18 @@ describe('Mega forme stats in the damage factor', () => {
     expect(r.domains.get('M')!.get('atk')!).not.toContain(0);
   });
 }, SLOW);
+
+describe('Contradiction pinpoint', () => {
+  it('names the conflicting stat when a mon is over-constrained', () => {
+    const A: SolverMon = { id: 'A', spec: incineroar, observedMaxHp: 95 + 75 };
+    const D: SolverMon = { id: 'D', spec: garchomp, observedMaxHp: 183 };
+    // an impossible clean Flare Blitz: no defense value can explain that damage.
+    const sys = new ConstraintSystem(gen, [A, D], [
+      { attackerId: 'A', defenderId: 'D', move: 'Flare Blitz', observedDamage: 100000 },
+    ]);
+    for (const [s, v] of Object.entries({ atk: 12, def: 0, spa: 0, spd: 0, spe: 0 })) sys.restrictDomain('A', s as 'atk', [v]);
+    const D_report = sys.solve({ method: 'exact' }).mons.find((m) => m.monId === 'D')!;
+    expect(D_report.contradiction).toBeDefined();
+    expect(D_report.contradictionStat).toBe('def'); // Flare Blitz is physical → the conflict is on Def
+  }, SLOW);
+});

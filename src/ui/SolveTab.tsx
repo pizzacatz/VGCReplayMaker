@@ -103,7 +103,31 @@ function MonCard({ report }: { report: MonReport }) {
         {report.species} <span className="muted">· {report.method ?? '—'}</span>
       </h2>
 
-      {report.contradiction && <p className="error">⚠ {report.contradiction}</p>}
+      {report.contradiction && (
+        <div className="panel" style={{ background: 'var(--panel2)', border: '1px solid var(--bad)', marginBottom: 10 }}>
+          <p className="error" style={{ marginTop: 0 }}>⚠ {report.contradiction}</p>
+          {report.contradictionStat && (
+            <>
+              <div style={{ fontSize: 12.5 }}>
+                These <strong>{report.contradictionStat.toUpperCase()}</strong> hits can't all be true — one is likely
+                mis-transcribed (wrong HP, crit, weather/screen) or the mon Mega-evolved. Fix the offending event, or
+                exclude its game (⊘ in the nav), then re-solve:
+              </div>
+              <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, marginTop: 4 }}>
+                {report.evidence.hits
+                  .filter((h) => h.stat === report.contradictionStat)
+                  .map((h, i) => (
+                    <div key={i}>
+                      {h.role === 'taken' ? '⮜ took ' : '⮞ dealt '}
+                      <strong>{h.move}</strong> {h.role === 'taken' ? 'from' : 'to'} {h.opponentSpecies} · {h.observedDamage} dmg
+                      {h.source ? <span className="muted"> · {h.source}</span> : null}
+                    </div>
+                  ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {report.headline && (
         <div className="panel" style={{ background: 'var(--panel2)', marginBottom: 10 }}>

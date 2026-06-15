@@ -11,6 +11,7 @@ import {
   moveGame,
   renameTournament,
   setMatchField,
+  toggleGameExcluded,
   standingLabel,
   storeFromLegacyWorkspace,
   winsNeeded,
@@ -190,6 +191,17 @@ describe('moveGame reorders + renumbers (the "this is actually Game 2" workflow)
   it('is a no-op at the ends', () => {
     const store = emptyStore();
     expect(moveGame(store, store.activeGameId, -1)).toBe(store); // single game, can't move earlier
+  });
+});
+
+describe('toggleGameExcluded (quarantine a game from the solve)', () => {
+  it('flips the flag on and back off (cleared, not left false)', () => {
+    let store = emptyStore();
+    const id = store.activeGameId;
+    store = toggleGameExcluded(store, id);
+    expect(store.tournaments[0]!.matches[0]!.games[0]!.excludedFromSolve).toBe(true);
+    store = toggleGameExcluded(store, id);
+    expect('excludedFromSolve' in store.tournaments[0]!.matches[0]!.games[0]!).toBe(false);
   });
 });
 

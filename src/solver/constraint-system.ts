@@ -167,6 +167,8 @@ export interface MonReport {
   method?: SolveMethod;
   /** set when this mon's clean constraints are unsatisfiable (no force-fit) */
   contradiction?: string;
+  /** the stat whose domain emptied — its evidence hits are the conflicting set */
+  contradictionStat?: NonHpStat;
   /** set when the feasible space was too large to weight exactly (Phase A still shown) */
   note?: string;
 }
@@ -520,7 +522,11 @@ export class ConstraintSystem {
 
     for (const monId of this.monIds) {
       const perStatDomains = phaseA.domains.get(monId)!;
-      const empty = NON_HP_STATS.some((s) => perStatDomains.get(s)!.length === 0);
+      // The conflict is a stat a HIT/SPEED fact directly emptied — not a budget-cascade
+      // victim (when one stat empties, the budget sum can empty the others too).
+      const emptyStats = NON_HP_STATS.filter((s) => perStatDomains.get(s)!.length === 0);
+      const touchedSet = this.touched.get(monId);
+      const emptyStat = emptyStats.find((s) => touchedSet?.has(s)) ?? emptyStats[0];
       reports.set(monId, {
         monId,
         species: this.specs.get(monId)!.species,
@@ -531,8 +537,11 @@ export class ConstraintSystem {
         remainingMassPct: 100,
         evidence: this.computeEvidence(monId),
         missing: [],
-        ...(empty
-          ? { contradiction: phaseA.contradictions.find((c) => c.includes(monId)) ?? 'no feasible spread' }
+        ...(emptyStat
+          ? {
+              contradiction: phaseA.contradictions.find((c) => c.includes(monId)) ?? 'no feasible spread',
+              contradictionStat: emptyStat,
+            }
           : {}),
       });
     }
