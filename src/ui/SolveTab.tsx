@@ -2,11 +2,11 @@ import { useState } from 'react';
 import type { MonReport, SolveResult } from '../solver';
 import type { InstanceReport } from '../aggregation';
 import { runSolve, type Workspace } from './model';
-import { activeTournament, solveTournament, teamById, type ScoutingStore } from './store';
+import { activeTournament, setDamageStatus, solveTournament, teamById, toggleGameExcluded, tournamentSources, type ScoutingStore } from './store';
 
 type Scope = 'game' | 'tournament';
 
-export function SolveTab({ ws, store }: { ws: Workspace; store: ScoutingStore }) {
+export function SolveTab({ ws, store, setStore }: { ws: Workspace; store: ScoutingStore; setStore: (s: ScoutingStore) => void }) {
   const [scope, setScope] = useState<Scope>('tournament');
   const [result, setResult] = useState<SolveResult | null>(null);
   const [tResult, setTResult] = useState<Map<string, InstanceReport> | null>(null);
@@ -64,10 +64,12 @@ export function SolveTab({ ws, store }: { ws: Workspace; store: ScoutingStore })
       </div>
       {error && <p className="error">Error: {error}</p>}
 
+      {scope === 'tournament' && t && <SourcesPanel store={store} setStore={setStore} />}
+
       {result && (
         <div className="row">
           {result.mons.map((m) => (
-            <MonCard key={m.monId} report={m} />
+            <MonCard key={m.monId} report={m} onExcludeHit={(id) => setStore(setDamageStatus(store, id, 'unresolved'))} />
           ))}
         </div>
       )}
@@ -84,7 +86,7 @@ export function SolveTab({ ws, store }: { ws: Workspace; store: ScoutingStore })
               ))}
               <div className="row">
                 {inst.mons.map((m) => (
-                  <MonCard key={m.monId} report={m.report} />
+                  <MonCard key={m.monId} report={m.report} onExcludeHit={(id) => setStore(setDamageStatus(store, id, 'unresolved'))} />
                 ))}
               </div>
             </div>
@@ -94,9 +96,46 @@ export function SolveTab({ ws, store }: { ws: Workspace; store: ScoutingStore })
   );
 }
 
+/** The source library: every game feeding the tournament solve, with hit counts + an exclude toggle. */
+function SourcesPanel({ store, setStore }: { store: ScoutingStore; setStore: (s: ScoutingStore) => void }) {
+  const t = activeTournament(store);
+  if (!t) return null;
+  const sources = tournamentSources(t);
+  const included = sources.filter((s) => !s.excluded);
+  const totalHits = included.reduce((n, s) => n + s.cleanHits, 0);
+  return (
+    <details className="panel" style={{ background: 'var(--panel2)', marginBottom: 12 }} open>
+      <summary style={{ cursor: 'pointer' }}>
+        <strong>Sources</strong>{' '}
+        <span className="muted">
+          {included.length}/{sources.length} games · {totalHits} clean hits feeding this solve
+        </span>
+      </summary>
+      <div style={{ marginTop: 6 }}>
+        {sources.map((s) => (
+          <div key={s.gameId} className="event" style={s.excluded ? { opacity: 0.55 } : undefined}>
+            <span style={{ textDecoration: s.excluded ? 'line-through' : undefined }}>{s.label}</span>
+            <span className="muted" style={{ fontSize: 12 }}>· {s.cleanHits} clean hits</span>
+            <button
+              style={{ marginLeft: 'auto', padding: '2px 6px', color: s.excluded ? 'var(--warn)' : 'var(--muted)' }}
+              onClick={() => setStore(toggleGameExcluded(store, s.gameId))}
+              title={s.excluded ? 'excluded — click to include' : 'exclude from the solve'}
+            >
+              {s.excluded ? '⊘ excluded' : '⊙ included'}
+            </button>
+          </div>
+        ))}
+        <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+          Exclude a game to quarantine stale or mis-transcribed data without deleting it, then re-solve.
+        </p>
+      </div>
+    </details>
+  );
+}
+
 const STAT_ORDER = ['hp', 'atk', 'def', 'spa', 'spd', 'spe'];
 
-function MonCard({ report }: { report: MonReport }) {
+function MonCard({ report, onExcludeHit }: { report: MonReport; onExcludeHit?: (eventId: string) => void }) {
   return (
     <div className="col panel" style={{ minWidth: 360 }}>
       <h2 style={{ marginTop: 0 }}>
@@ -169,16 +208,26 @@ function MonCard({ report }: { report: MonReport }) {
             {[...report.evidence.hits]
               .sort((a, b) => a.stat.localeCompare(b.stat))
               .map((h, i) => (
-                <div key={i} style={{ padding: '1px 0' }}>
-                  <span className="tag bounded" style={{ marginRight: 4 }}>{h.stat.toUpperCase()}</span>
-                  {h.role === 'taken' ? '⮜ took ' : '⮞ dealt '}
-                  <strong>{h.move}</strong> {h.role === 'taken' ? 'from' : 'to'} {h.opponentSpecies} ·{' '}
-                  {h.observedDamage} dmg
-                  {h.source ? <span className="muted"> · {h.source}</span> : null}
+                <div key={i} style={{ padding: '1px 0', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span className="tag bounded">{h.stat.toUpperCase()}</span>
+                  <span>
+                    {h.role === 'taken' ? '⮜ took ' : '⮞ dealt '}
+                    <strong>{h.move}</strong> {h.role === 'taken' ? 'from' : 'to'} {h.opponentSpecies} · {h.observedDamage} dmg
+                    {h.source ? <span className="muted"> · {h.source}</span> : null}
+                  </span>
+                  {onExcludeHit && h.eventId && (
+                    <button
+                      style={{ marginLeft: 'auto', padding: '0 5px', color: 'var(--warn)' }}
+                      title="exclude this hit from the solve (marks it unresolved); re-solve to apply"
+                      onClick={() => onExcludeHit(h.eventId!)}
+                    >
+                      ✕ exclude
+                    </button>
+                  )}
                 </div>
               ))}
             <div className="muted" style={{ marginTop: 3 }}>
-              taken → constrains its defenses · dealt → its offenses
+              taken → constrains its defenses · dealt → its offenses · ✕ marks a hit unresolved (then re-solve)
             </div>
           </div>
         </details>

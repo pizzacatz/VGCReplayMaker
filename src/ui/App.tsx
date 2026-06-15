@@ -93,17 +93,19 @@ export function App() {
     reader.readAsText(file);
   };
 
-  const importMatchFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
+  const importMatchFiles = async (files: FileList) => {
+    const texts = await Promise.all([...files].map((f) => f.text()));
+    let next = store;
+    const failed: string[] = [];
+    texts.forEach((raw, i) => {
       try {
-        const bundle = JSON.parse(String(reader.result)) as MatchBundle;
-        setStore(importMatchBundle(store, bundle)); // merges, never overwrites
+        next = importMatchBundle(next, JSON.parse(raw) as MatchBundle); // fold each in; merges, never overwrites
       } catch (e) {
-        alert(`Could not import match: ${(e as Error).message}`);
+        failed.push(`${files[i]!.name}: ${(e as Error).message}`);
       }
-    };
-    reader.readAsText(file);
+    });
+    setStore(next);
+    if (failed.length) alert(`Some files could not be imported:\n${failed.join('\n')}`);
   };
 
   const tabs: Array<[Tab, string]> = [
@@ -138,15 +140,16 @@ export function App() {
         ))}
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
           <button onClick={exportMatchFile} title="Export just this match (set + its two teams) to share/back up">⤓ Match</button>
-          <button onClick={() => matchFileRef.current?.click()} title="Import a match file — merged in, nothing is overwritten">⤒ Match</button>
+          <button onClick={() => matchFileRef.current?.click()} title="Import one or more match files — merged in, nothing is overwritten">⤒ Match(es)</button>
           <input
             ref={matchFileRef}
             type="file"
             accept="application/json,.json"
+            multiple
             style={{ display: 'none' }}
             onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) importMatchFile(f);
+              const fs = e.target.files;
+              if (fs && fs.length) void importMatchFiles(fs);
               e.target.value = '';
             }}
           />
@@ -177,7 +180,7 @@ export function App() {
       <ErrorBoundary key={`${tab}-${store.activeGameId}`} onReset={() => setStore(emptyStore())}>
         {tab === 'teams' && <TeamsTab ws={ws} setWs={setWs} />}
         {tab === 'transcribe' && <TranscribeTab ws={ws} setWs={setWs} />}
-        {tab === 'solve' && <SolveTab ws={ws} store={store} />}
+        {tab === 'solve' && <SolveTab ws={ws} store={store} setStore={setStore} />}
         {tab === 'replay' && <ReplayTab ws={ws} />}
       </ErrorBoundary>
     </div>

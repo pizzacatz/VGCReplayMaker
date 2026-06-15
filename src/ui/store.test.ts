@@ -10,8 +10,10 @@ import {
   matchStanding,
   moveGame,
   renameTournament,
+  setDamageStatus,
   setMatchField,
   toggleGameExcluded,
+  tournamentSources,
   standingLabel,
   storeFromLegacyWorkspace,
   winsNeeded,
@@ -191,6 +193,47 @@ describe('moveGame reorders + renumbers (the "this is actually Game 2" workflow)
   it('is a no-op at the ends', () => {
     const store = emptyStore();
     expect(moveGame(store, store.activeGameId, -1)).toBe(store); // single game, can't move earlier
+  });
+});
+
+describe('sources library + per-hit exclude', () => {
+  const mon = (id: string, species: string): MonEntry => ({
+    monId: id,
+    parsed: { species, level: 50, moves: [], alignment: 'neutral', spreadKnown: false, flags: [] },
+    observedMaxHp: 175,
+  });
+  const withHit = () => {
+    let s = emptyStore();
+    const ws = deriveWorkspace(s);
+    return applyWorkspace(s, {
+      ...ws,
+      sideA: { ...ws.sideA, player: 'Alice', mons: [mon('A0', 'Garchomp')], leads: ['A0'] },
+      sideB: { ...ws.sideB, player: 'Bob', mons: [mon('B0', 'Incineroar')], leads: ['B0'] },
+      events: [
+        { eventId: 'mv', seq: 1, turn: 1, type: 'move_used', user: 'A0', move: 'Earthquake', targets: ['B0'] },
+        { eventId: 'dmg', seq: 2, turn: 1, type: 'damage', attacker: 'A0', defender: 'B0', move: 'Earthquake', hpBefore: 175, hpAfter: 120, crit: false, status: 'clean' },
+      ],
+    });
+  };
+
+  it('tournamentSources counts clean hits per game', () => {
+    const sources = tournamentSources(withHit().tournaments[0]!);
+    expect(sources).toHaveLength(1);
+    expect(sources[0]!.cleanHits).toBe(1);
+    expect(sources[0]!.excluded).toBe(false);
+  });
+
+  it('a per-game exclude drops that game from the source count', () => {
+    let s = withHit();
+    s = toggleGameExcluded(s, s.activeGameId);
+    expect(tournamentSources(s.tournaments[0]!)[0]!.excluded).toBe(true);
+  });
+
+  it('setDamageStatus to unresolved removes the hit from the solve inputs', () => {
+    let s = withHit();
+    expect(tournamentSources(s.tournaments[0]!)[0]!.cleanHits).toBe(1);
+    s = setDamageStatus(s, 'dmg', 'unresolved');
+    expect(tournamentSources(s.tournaments[0]!)[0]!.cleanHits).toBe(0); // no longer clean → excluded
   });
 });
 

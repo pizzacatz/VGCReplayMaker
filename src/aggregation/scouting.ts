@@ -69,6 +69,8 @@ export interface GameHit {
   defenderSpecies?: string;
   /** provenance label for the evidence drill-down (e.g. "R7 G2 · T3"). */
   source?: string;
+  /** the originating damage event's id (for per-hit exclude). */
+  eventId?: string;
 }
 
 export interface GameSpeedFact {
@@ -183,6 +185,7 @@ export class ScoutingDB {
           ...(hit.attackerSpecies ? { attackerSpecies: hit.attackerSpecies } : {}),
           ...(hit.defenderSpecies ? { defenderSpecies: hit.defenderSpecies } : {}),
           ...(hit.source ? { source: hit.source } : {}),
+          ...(hit.eventId ? { eventId: hit.eventId } : {}),
         });
       }
       for (const sf of game.speedFacts ?? []) {

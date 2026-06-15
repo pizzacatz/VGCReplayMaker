@@ -48,6 +48,8 @@ export interface SolverHit {
   defenderSpecies?: string | undefined;
   /** opaque provenance label for the drill-down (e.g. "R7 G2 · T3"); UI-formatted upstream. */
   source?: string | undefined;
+  /** the originating damage event's id — lets the UI exclude this exact hit. */
+  eventId?: string | undefined;
 }
 
 /** A multiplicative speed-control modifier, applied as floor(speed × num / den). */
@@ -123,6 +125,8 @@ export interface EvidenceHit {
   opponentSpecies: string;
   /** provenance label, e.g. "R7 G2 · T3" (undefined for ad-hoc hits) */
   source?: string;
+  /** the originating damage event's id — lets the UI exclude this exact hit. */
+  eventId?: string;
 }
 
 /** Provenance: how much evidence informed this mon's result (Output Contract §7). */
@@ -218,6 +222,7 @@ interface HitFactor {
   move: string;
   observedDamage: number;
   source?: string | undefined;
+  eventId?: string | undefined;
 }
 
 interface SpeedRelation {
@@ -404,6 +409,7 @@ export class ConstraintSystem {
         move: hit.move,
         observedDamage: hit.observedDamage,
         source: hit.source,
+        eventId: hit.eventId,
       });
       this.touched.get(hit.attackerId)!.add(factor.offensiveStat as NonHpStat);
       this.touched.get(hit.defenderId)!.add(factor.defensiveStat as NonHpStat);
@@ -600,9 +606,9 @@ export class ConstraintSystem {
     const hits: EvidenceHit[] = [];
     for (const f of this.hitFactors) {
       if (f.defenderId === monId)
-        hits.push({ role: 'taken', stat: f.defStat, move: f.move, observedDamage: f.observedDamage, opponentSpecies: this.specs.get(f.attackerId)?.species ?? f.attackerId, ...(f.source ? { source: f.source } : {}) });
+        hits.push({ role: 'taken', stat: f.defStat, move: f.move, observedDamage: f.observedDamage, opponentSpecies: this.specs.get(f.attackerId)?.species ?? f.attackerId, ...(f.source ? { source: f.source } : {}), ...(f.eventId ? { eventId: f.eventId } : {}) });
       if (f.attackerId === monId)
-        hits.push({ role: 'dealt', stat: f.offStat, move: f.move, observedDamage: f.observedDamage, opponentSpecies: this.specs.get(f.defenderId)?.species ?? f.defenderId, ...(f.source ? { source: f.source } : {}) });
+        hits.push({ role: 'dealt', stat: f.offStat, move: f.move, observedDamage: f.observedDamage, opponentSpecies: this.specs.get(f.defenderId)?.species ?? f.defenderId, ...(f.source ? { source: f.source } : {}), ...(f.eventId ? { eventId: f.eventId } : {}) });
     }
     return {
       cleanHitsIn: this.hitFactors.filter((f) => f.defenderId === monId).length,

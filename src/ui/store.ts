@@ -392,18 +392,67 @@ export function selectGame(store: ScoutingStore, gameId: string): ScoutingStore 
 /** Toggle whether a game's hits feed the tournament solve (quarantine without deleting). */
 export function toggleGameExcluded(store: ScoutingStore, gameId: string): ScoutingStore {
   const t = activeTournament(store);
-  const match = activeMatch(store);
-  if (!t || !match) return store;
-  const games = match.games.map((g) => {
-    if (g.gameId !== gameId) return g;
-    if (g.excludedFromSolve) {
-      const { excludedFromSolve: _drop, ...rest } = g;
-      return rest;
-    }
-    return { ...g, excludedFromSolve: true };
+  if (!t) return store;
+  let changed = false;
+  const matches = t.matches.map((m) => {
+    if (!m.games.some((g) => g.gameId === gameId)) return m;
+    changed = true;
+    const games = m.games.map((g) => {
+      if (g.gameId !== gameId) return g;
+      if (g.excludedFromSolve) {
+        const { excludedFromSolve: _drop, ...rest } = g;
+        return rest;
+      }
+      return { ...g, excludedFromSolve: true };
+    });
+    return { ...m, games };
   });
-  const nextMatch: Match = { ...match, games };
-  return replaceTournament(store, { ...t, matches: t.matches.map((m) => (m.matchId === match.matchId ? nextMatch : m)) });
+  return changed ? replaceTournament(store, { ...t, matches }) : store;
+}
+
+/** Set a damage event's certainty (clean feeds the solver; unresolved excludes it). Searches the active tournament. */
+export function setDamageStatus(store: ScoutingStore, eventId: string, status: 'clean' | 'composite' | 'unresolved'): ScoutingStore {
+  const t = activeTournament(store);
+  if (!t) return store;
+  let changed = false;
+  const matches = t.matches.map((m) => ({
+    ...m,
+    games: m.games.map((g) => {
+      if (!g.events.some((e) => e.eventId === eventId && e.type === 'damage')) return g;
+      changed = true;
+      return { ...g, events: g.events.map((e) => (e.eventId === eventId && e.type === 'damage' ? { ...e, status } : e)) };
+    }),
+  }));
+  return changed ? replaceTournament(store, { ...t, matches }) : store;
+}
+
+export interface SourceGame {
+  gameId: string;
+  label: string;
+  /** clean hits this game contributes to the solve */
+  cleanHits: number;
+  excluded: boolean;
+}
+
+/** Every game in the tournament and how many clean hits it feeds the solve (the source library). */
+export function tournamentSources(t: Tournament): SourceGame[] {
+  const out: SourceGame[] = [];
+  for (const match of t.matches) {
+    for (const game of match.games) {
+      const teamA = teamById(t, match.teamAId);
+      const teamB = teamById(t, match.teamBId);
+      let cleanHits = 0;
+      if (teamA && teamB) {
+        try {
+          cleanHits = extractCleanHits(buildLog(workspaceFromGame(t, match, game))).length;
+        } catch {
+          cleanHits = 0;
+        }
+      }
+      out.push({ gameId: game.gameId, label: `${match.round} · G${game.gameNumber}`, cleanHits, excluded: !!game.excludedFromSolve });
+    }
+  }
+  return out;
 }
 
 /** Move a game earlier (delta -1) or later (delta +1) in the set; gameNumbers follow position. */
@@ -586,6 +635,7 @@ export function solveTournament(t: Tournament): Map<string, InstanceReport> {
         ...(h.attackerSpecies ? { attackerSpecies: h.attackerSpecies } : {}),
         ...(h.defenderSpecies ? { defenderSpecies: h.defenderSpecies } : {}),
         source: `${match.round} G${game.gameNumber}${h.source ? ` · ${h.source}` : ''}`, // full provenance
+        ...(h.eventId ? { eventId: h.eventId } : {}),
       }));
       const speedFacts: GameSpeedFact[] = extractSpeedFacts(log, gen, specs).facts.map((f) => ({
         first: ref(f.first),
