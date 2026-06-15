@@ -150,11 +150,11 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText(/→99/)).toBeTruthy(); // event log reflects the edit
   });
 
-  it('the forfeit button records a forfeit result for the opponent', () => {
-    const { getByText, getByDisplayValue } = render(<Harness />);
+  it('the forfeit button records a forfeit as a timeline event', () => {
+    const { getByText, getAllByText } = render(<Harness />);
     fireEvent.click(getByText('⚑ You')); // "You" forfeits → Opp wins
-    expect(getByDisplayValue('Opp wins')).toBeTruthy(); // winner = side B
-    expect(getByDisplayValue('by forfeit')).toBeTruthy(); // reason = forfeit
+    expect(getAllByText(/You forfeited/).length).toBeGreaterThan(0); // status chip + event-log entry
+    expect(getByText(/⚑ You forfeited — game over/)).toBeTruthy(); // appears on the event timeline
   });
 
   it('the Faint button marks a Pokémon fainted', () => {
@@ -238,4 +238,44 @@ describe('TranscribeTab does not crash on interaction', () => {
     fireEvent.click(getByText('Mega Evolve ✦')); // single button, forme from the stone
     expect(getByText(/Mega-Evolved → Aerodactyl-Mega/)).toBeTruthy();
   });
+
+  it('End turn logs this turn’s residuals AND advances, together', () => {
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [
+        { eventId: 't1', seq: 1, turn: 1, type: 'turn_start' },
+        { eventId: 's', seq: 2, turn: 1, type: 'status_applied', target: 'A0', status: 'psn' },
+      ],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getByText } = render(<H />);
+    fireEvent.click(getByText('▶ End turn'));
+    expect(getByText(/\(Poison\)/)).toBeTruthy(); // residual applied
+    expect(getByText(/── turn 2 ──/)).toBeTruthy(); // and advanced
+  });
+
+  it('End turn pauses on a residual KO (no advance) so a replacement can be sent', () => {
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [entry('A', 0, 'Incineroar'), entry('A', 1, 'Zapdos')], leads: ['A0', 'A1'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [
+        { eventId: 't1', seq: 1, turn: 1, type: 'turn_start' },
+        { eventId: 'p', seq: 2, turn: 1, type: 'passive_hp_change', target: 'A0', source: 'test', hpBefore: 175, hpAfter: 5 },
+        { eventId: 's', seq: 3, turn: 1, type: 'status_applied', target: 'A0', status: 'psn' },
+      ],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getByText, getAllByText, queryByText } = render(<H />);
+    fireEvent.click(getByText('▶ End turn'));
+    expect(getAllByText(/fainted/).length).toBeGreaterThan(0); // residual KO recorded
+    expect(queryByText(/── turn 2 ──/)).toBeNull(); // did NOT advance
+  });
+
 });

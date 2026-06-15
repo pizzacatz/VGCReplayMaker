@@ -131,6 +131,13 @@ export interface RandomOutcomeEvent extends BaseEvent {
   linkedEvent?: string;
 }
 
+/** A player conceding the game — an in-match action, recorded on the timeline. */
+export interface ForfeitEvent extends BaseEvent {
+  type: 'forfeit';
+  /** the side that forfeited (the OTHER side wins) */
+  side: Side;
+}
+
 export type MatchEvent =
   | TurnStartEvent
   | MoveUsedEvent
@@ -145,7 +152,8 @@ export type MatchEvent =
   | FieldChangeEvent
   | ItemOrAbilityEvent
   | MegaEvolutionEvent
-  | RandomOutcomeEvent;
+  | RandomOutcomeEvent
+  | ForfeitEvent;
 
 /** Minimal mon sheet info replay needs (the full sheet lives in the roster/TeamInstance). */
 export interface LogMonSheet {

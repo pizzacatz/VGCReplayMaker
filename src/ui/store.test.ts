@@ -6,6 +6,7 @@ import {
   deriveWorkspace,
   emptyStore,
   exportMatch,
+  gameResult,
   importMatchBundle,
   matchStanding,
   moveGame,
@@ -234,6 +235,20 @@ describe('sources library + per-hit exclude', () => {
     expect(tournamentSources(s.tournaments[0]!)[0]!.cleanHits).toBe(1);
     s = setDamageStatus(s, 'dmg', 'unresolved');
     expect(tournamentSources(s.tournaments[0]!)[0]!.cleanHits).toBe(0); // no longer clean → excluded
+  });
+});
+
+describe('forfeit as a timeline event drives the result (no result flag)', () => {
+  it('a forfeit event makes the other side the game winner and counts in the standing', () => {
+    let store = emptyStore();
+    const ws = deriveWorkspace(store);
+    store = applyWorkspace(store, { ...ws, events: [{ eventId: 'ff', seq: 1, turn: 1, type: 'forfeit', side: 'A' }] }); // side A concedes
+    const m = store.tournaments[0]!.matches[0]!;
+    expect(m.games[0]!.result).toBeUndefined(); // no explicit flag
+    expect(gameResult(m.games[0]!)).toEqual({ winner: 'B', reason: 'forfeit' }); // derived from the event
+    const s = matchStanding(m);
+    expect(s.scoreB).toBe(1);
+    expect(s.played).toBe(1);
   });
 });
 

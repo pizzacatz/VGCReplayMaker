@@ -8,6 +8,7 @@ import {
   endOfTurnEvents,
   entryEffectEvents,
   estimateDamage,
+  forfeitFromEvents,
   megaFormeAbility,
   megaFormeFromItem,
   monAbility,
@@ -46,6 +47,9 @@ interface TargetOutcome {
   hits?: string;
 }
 const blankOutcome = (): TargetOutcome => ({ hpAfter: '', crit: false, flinch: false, missed: false, ko: false, status: 'clean' });
+
+/** Sources emitted by end-of-turn residuals — used to detect "already applied this turn". */
+const END_OF_TURN_SOURCES = new Set(['Sandstorm', 'Leftovers', 'Black Sludge', 'Burn', 'Poison', 'Toxic', 'Poison Heal', 'Grassy Terrain']);
 
 export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspace) => void }) {
   const diagnosis = useMemo(() => diagnoseLog(ws), [ws]);
@@ -122,9 +126,40 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     setWs({ ...ws, events: [...ws.events, ...evs] });
   };
 
-  const newTurn = () => {
-    const n = ws.events.filter((e) => e.type === 'turn_start').length + 1;
-    emit([(seq) => ({ eventId: nextEventId(), seq, turn: n, type: 'turn_start' })]);
+  // Have this turn's end-of-turn residuals already been logged? (reload-safe, source-based)
+  const residualsApplied = (turn: number): boolean =>
+    ws.events.some(
+      (e) =>
+        e.turn === turn &&
+        (((e.type === 'passive_hp_change' || e.type === 'heal') && END_OF_TURN_SOURCES.has(e.source)) ||
+          (e.type === 'status_applied' && (e.source === 'Flame Orb' || e.source === 'Toxic Orb'))),
+    );
+  const faintedAwaitingReplacement = actives.some((m) => m.fainted) && residualsApplied(currentTurn);
+
+  /**
+   * End the turn: apply this turn's residuals (if not already), then advance —
+   * UNLESS a residual KO'd a Pokémon, in which case it pauses so you can send a
+   * replacement; clicking again then advances. Residuals + the new turn are one
+   * atomic update (no stale-state races).
+   */
+  const endTurn = () => {
+    let seq = ws.events.length ? Math.max(...ws.events.map((e) => e.seq)) : 0;
+    const newEvents: MatchEvent[] = [];
+    let faintNow = false;
+    if (!residualsApplied(currentTurn)) {
+      for (const b of endOfTurnEvents(ws, board)) {
+        seq += 1;
+        const ev = b(seq, currentTurn);
+        newEvents.push(ev);
+        if (ev.type === 'faint') faintNow = true;
+      }
+    }
+    if (!faintNow) {
+      const n = ws.events.filter((e) => e.type === 'turn_start').length + 1; // advance
+      seq += 1;
+      newEvents.push({ eventId: nextEventId(), seq, turn: n, type: 'turn_start' });
+    }
+    setWs({ ...ws, events: [...ws.events, ...newEvents] });
   };
 
   // Start of match: turn 1 + lead entry abilities (Intimidate, weather/terrain).
@@ -298,12 +333,19 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
           {ws.events.length === 0 ? (
             <button className="primary" onClick={startMatch}>▶ Start match (applies lead abilities)</button>
           ) : (
-            <>
-              <button onClick={() => emit(endOfTurnEvents(ws, board))}>⤓ End of turn (residuals)</button>
-              <button onClick={newTurn}>▶ New turn</button>
-            </>
+            <button
+              className="primary"
+              onClick={endTurn}
+              title="Apply end-of-turn residuals, then advance. Pauses on a residual KO so you can send a replacement."
+            >
+              {faintedAwaitingReplacement ? '▶ Next turn' : '▶ End turn'}
+            </button>
           )}
-          <span className="muted">Damage, recoil, Intimidate, weather, items auto-fill — adjust HP to the screen.</span>
+          <span className="muted">
+            {faintedAwaitingReplacement
+              ? 'A Pokémon fainted from residuals — send its replacement on the board, then advance.'
+              : 'End turn applies residuals (weather/status/items) then advances — adjust HP to the screen.'}
+          </span>
         </div>
 
         <div className="controls" style={{ marginTop: 0 }}>
@@ -325,28 +367,27 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
             <option value="B">{ws.sideB.player} wins</option>
           </select>
           {ws.result && (
-            <select value={ws.result.reason} onChange={(e) => setWs({ ...ws, result: { ...ws.result!, reason: e.target.value as 'ko' | 'forfeit' | 'timeout' | 'dq' } })}>
+            <select value={ws.result.reason} onChange={(e) => setWs({ ...ws, result: { ...ws.result!, reason: e.target.value as 'ko' | 'timeout' | 'dq' } })}>
               <option value="ko">by KO</option>
-              <option value="forfeit">by forfeit</option>
               <option value="timeout">by timeout</option>
               <option value="dq">by DQ</option>
             </select>
           )}
-          <span className="muted" style={{ fontSize: 12 }}>· forfeit:</span>
-          <button
-            title={`${ws.sideA.player} forfeits → ${ws.sideB.player} wins`}
-            onClick={() => setWs({ ...ws, result: { winner: 'B', reason: 'forfeit' } })}
-            style={ws.result?.reason === 'forfeit' && ws.result.winner === 'B' ? { borderColor: 'var(--bad)' } : undefined}
-          >
+          <span className="muted" style={{ fontSize: 12 }}>· forfeit (logs an event):</span>
+          <button title={`${ws.sideA.player} forfeits → ${ws.sideB.player} wins`} onClick={() => emit([(seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'forfeit', side: 'A' })])}>
             ⚑ {ws.sideA.player}
           </button>
-          <button
-            title={`${ws.sideB.player} forfeits → ${ws.sideA.player} wins`}
-            onClick={() => setWs({ ...ws, result: { winner: 'A', reason: 'forfeit' } })}
-            style={ws.result?.reason === 'forfeit' && ws.result.winner === 'A' ? { borderColor: 'var(--bad)' } : undefined}
-          >
+          <button title={`${ws.sideB.player} forfeits → ${ws.sideA.player} wins`} onClick={() => emit([(seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'forfeit', side: 'B' })])}>
             ⚑ {ws.sideB.player}
           </button>
+          {(() => {
+            const f = forfeitFromEvents(ws.events);
+            return f ? (
+              <span className="chip" style={{ color: 'var(--bad)' }}>
+                ⚑ {(f.winner === 'A' ? ws.sideB.player : ws.sideA.player)} forfeited → {(f.winner === 'A' ? ws.sideA.player : ws.sideB.player)} wins
+              </span>
+            ) : null;
+          })()}
         </div>
 
         <Board actives={actives} actor={actor} onPick={pickActor} youName={ws.sideA.player} oppName={ws.sideB.player} />
@@ -566,7 +607,7 @@ function EventLogColumn({ ws, setWs, highlightId }: { ws: Workspace; setWs: (w: 
           >
             <span className="drag" title="drag to reorder" style={{ cursor: 'grab', color: 'var(--muted)' }}>⠿</span>
             <span className="seq">{e.seq}</span>
-            <span>{describe(e, (id) => monLabel(ws, id))}</span>
+            <span>{describe(e, (id) => monLabel(ws, id), (s) => (s === 'A' ? ws.sideA.player : ws.sideB.player))}</span>
             <span className="x" title="edit" style={{ marginLeft: 'auto', color: 'var(--accent)', cursor: 'pointer' }} onClick={() => setEditId(e.eventId)}>✎</span>
             <span className="x" title="delete" onClick={() => setWs({ ...ws, events: ws.events.filter((x) => x.eventId !== e.eventId) })}>✕</span>
           </div>
@@ -617,8 +658,9 @@ function ReconstructedPanel({ attacker, state }: { attacker: string; state: Repl
   );
 }
 
-function describe(e: MatchEvent, label: (id: string) => string): string {
+function describe(e: MatchEvent, label: (id: string) => string, sideName?: (s: 'A' | 'B') => string): string {
   switch (e.type) {
+    case 'forfeit': return `⚑ ${sideName?.(e.side) ?? `Player ${e.side}`} forfeited — game over`;
     case 'turn_start': return `── turn ${e.turn} ──`;
     case 'move_used': return `${label(e.user)} used ${e.move}${e.isSpread ? ' (spread)' : ''}`;
     case 'damage': return `${label(e.attacker)} ${e.move} → ${label(e.defender)}  ${e.hpBefore}→${e.hpAfter} [${e.status}]${e.crit ? ' CRIT' : ''}`;

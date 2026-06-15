@@ -112,6 +112,12 @@ export function toSpec(parsed: ParsedMon): MonSpec {
   };
 }
 
+/** The result implied by a forfeit event on the timeline (latest wins), if any. */
+export function forfeitFromEvents(events: MatchEvent[]): { winner: SideId; reason: MatchResultReason } | undefined {
+  const f = [...events].sort((a, b) => b.seq - a.seq).find((e): e is Extract<MatchEvent, { type: 'forfeit' }> => e.type === 'forfeit');
+  return f ? { winner: f.side === 'A' ? 'B' : 'A', reason: 'forfeit' } : undefined;
+}
+
 export function buildLog(ws: Workspace): MatchLog {
   const sheet = (m: MonEntry) => ({ monId: m.monId, species: m.parsed.species, maxHp: m.observedMaxHp, ...(m.parsed.nickname ? { nickname: m.parsed.nickname } : {}) });
   const slotLeads = (side: SideState, sideId: SideId) =>
@@ -126,7 +132,10 @@ export function buildLog(ws: Workspace): MatchLog {
     sideB: { player: ws.sideB.player, mons: ws.sideB.mons.map(sheet) },
     leads,
     events: [...ws.events].sort((a, b) => a.seq - b.seq),
-    ...(ws.result ? { result: { winnerSide: ws.result.winner, reason: ws.result.reason } } : {}),
+    ...(() => {
+      const r = ws.result ?? forfeitFromEvents(ws.events); // forfeit lives on the timeline
+      return r ? { result: { winnerSide: r.winner, reason: r.reason } } : {};
+    })(),
   };
 }
 

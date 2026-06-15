@@ -11,6 +11,7 @@
 import {
   emptyWorkspace,
   buildLog,
+  forfeitFromEvents,
   toSpec,
   type MatchResultReason,
   type MonEntry,
@@ -159,6 +160,11 @@ export interface MatchStanding {
   played: number;
 }
 
+/** A game's effective result: the explicit flag, or a forfeit recorded on its timeline. */
+export function gameResult(game: Game): GameResult | undefined {
+  return game.result ?? forfeitFromEvents(game.events);
+}
+
 /** Derive a match's standing purely from its games' results (+ optional set forfeit). */
 export function matchStanding(match: Match): MatchStanding {
   const need = winsNeeded(match.bestOf);
@@ -168,14 +174,15 @@ export function matchStanding(match: Match): MatchStanding {
   let aReason: MatchResultReason | undefined;
   let bReason: MatchResultReason | undefined;
   for (const g of match.games) {
-    if (!g.result) continue;
+    const r = gameResult(g);
+    if (!r) continue;
     played += 1;
-    if (g.result.winner === 'A') {
+    if (r.winner === 'A') {
       scoreA += 1;
-      aReason = g.result.reason;
+      aReason = r.reason;
     } else {
       scoreB += 1;
-      bReason = g.result.reason;
+      bReason = r.reason;
     }
   }
 
