@@ -98,6 +98,6 @@ Pokepaste **export** of a solved spread (best-guess → pokepaste text) would le
 ---
 
 ## 9. Open questions
-1. **Spread-line label** — confirm the line is labeled `SP:` (vs. an `EVs:` label reused for SP numbers). Resolved that values are **raw SP**; just need the label so the parser reads the right line. Minor.
-2. **Do you want pokepaste export** (§7) in scope?
-3. **Multi-mon paste delimiting** — confirm blocks are separated by blank lines (standard) and that a paste may contain fewer than 6 mons (partial rosters allowed).
+1. ~~**Spread-line label**~~ — **RESOLVED in impl (2026-06-15):** the parser accepts **either** an `SP:` or an `EVs:` label and reads the numbers as **raw Stat Points** (Champions has no EVs at this boundary). The values are validated as SP (each 0–32, sum 66), so a real EV spread (252s) is rejected; a spread that looks like EV-equivalents (multiples of 8 summing to 528) yields a helpful "use raw SP" hint. If real Champions pastes turn out to use EV-equivalent numbers, only the parse step changes.
+2. **Do you want pokepaste export** (§7) in scope? *(Still open — not built.)*
+3. ~~**Multi-mon paste delimiting**~~ — **RESOLVED in impl:** blocks split on blank lines; partial rosters (<6) allowed; >6 raises a soft team-level flag.

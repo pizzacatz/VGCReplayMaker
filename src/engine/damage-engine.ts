@@ -65,6 +65,25 @@ export function roleOf(alignment: MonAlignment, stat: StatKey): AlignmentRole {
   return 'neutral';
 }
 
+/** Natures with no stat effect → neutral alignment. */
+const NEUTRAL_NATURES = new Set(['Hardy', 'Docile', 'Bashful', 'Quirky', 'Serious']);
+
+const NATURE_TO_ALIGNMENT = new Map<string, MonAlignment>();
+for (const up of Object.keys(NATURE_TABLE) as Array<Exclude<StatKey, 'hp'>>) {
+  for (const [down, name] of Object.entries(NATURE_TABLE[up])) {
+    if (name) NATURE_TO_ALIGNMENT.set(name, { up, down: down as StatKey });
+  }
+}
+
+/** Map a Nature name to a Champions alignment (Constitution §B4; pokepaste §5). */
+export function alignmentForNature(nature: string): MonAlignment {
+  const name = nature.trim().replace(/^(.)(.*)$/, (_m, a: string, b: string) => a.toUpperCase() + b.toLowerCase());
+  if (NEUTRAL_NATURES.has(name)) return 'neutral';
+  const alignment = NATURE_TO_ALIGNMENT.get(name);
+  if (!alignment) throw new Error(`unknown nature: ${nature}`);
+  return alignment;
+}
+
 /** The nature name encoding a mon's alignment (Hardy = neutral). */
 export function natureFor(alignment: MonAlignment): string {
   if (alignment === 'neutral') return 'Hardy';
