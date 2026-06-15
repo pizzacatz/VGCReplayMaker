@@ -242,7 +242,9 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
       for (const t of targets) {
         const o = outcomes[t] ?? blankOutcome();
         if (o.missed) {
-          builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'miss', outcome: 'yes' }));
+          // distinguish a Protect/Wide Guard block ("protected itself!") from a real accuracy miss
+          const blocker = protectionBlocking(ws, t, move, currentTurn);
+          builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: blocker ? 'blocked' : 'miss', outcome: blocker ?? 'yes' }));
           continue;
         }
         const after = o.ko ? 0 : o.hpAfter === '' ? null : Number(o.hpAfter);
@@ -674,6 +676,10 @@ function describe(e: MatchEvent, label: (id: string) => string, sideName?: (s: '
     case 'field_change': return `${e.field} ${e.action}${e.side ? ` [${e.side}]` : ''}`;
     case 'item_or_ability_event': return `${label(e.mon)} ${e.kind} ${e.name}`;
     case 'mega_evolution': return `${label(e.mon)} Mega-Evolved → ${e.megaSpecies}`;
-    case 'random_outcome': return e.eventKind === 'flinch' ? `${label(e.mon)} flinched` : e.eventKind === 'miss' ? `${label(e.mon)} was missed` : `${label(e.mon)} ${e.eventKind}: ${e.outcome}`;
+    case 'random_outcome':
+      if (e.eventKind === 'flinch') return `${label(e.mon)} flinched`;
+      if (e.eventKind === 'miss') return `${label(e.mon)} avoided the attack (missed)`;
+      if (e.eventKind === 'blocked') return `${label(e.mon)} protected itself (${e.outcome})`;
+      return `${label(e.mon)} ${e.eventKind}: ${e.outcome}`;
   }
 }

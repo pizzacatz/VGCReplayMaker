@@ -10,6 +10,11 @@
 import type { MatchEvent, MatchLog, Side } from '../log';
 
 const WEATHER_ID: Record<string, string> = { Sun: 'SunnyDay', Rain: 'RainDance', Sand: 'Sandstorm', Sandstorm: 'Sandstorm', Snow: 'Snow', Hail: 'Hail' };
+/** Protection moves → shown as "<mon> protected itself!" (|-singleturn| on use, |-activate| on block). */
+const PROTECTION_MOVES = new Set([
+  'Protect', 'Detect', 'Wide Guard', 'Quick Guard', 'Spiky Shield', "King's Shield", 'Baneful Bunker',
+  'Silk Trap', 'Obstruct', 'Burning Bulwark', 'Max Guard', 'Crafty Shield', 'Mat Block',
+]);
 const FIELD_CONDITIONS = new Set(['Electric Terrain', 'Grassy Terrain', 'Psychic Terrain', 'Misty Terrain', 'Trick Room', 'Gravity']);
 const SIDE_CONDITIONS = new Set(['Reflect', 'Light Screen', 'Aurora Veil', 'Tailwind', 'Safeguard', 'Mist']);
 
@@ -26,6 +31,7 @@ export function toShowdownLog(log: MatchLog): string {
 
   const slotByMon = new Map<string, string>(); // monId → 'p1a'
   const hpByMon = new Map<string, number>();
+  let lastAttacker: string | undefined; // for |-miss| source
   const place = (side: Side, pos: number, monId: string): string => {
     const slot = `${pside(side)}${ab(pos)}`;
     for (const [m, s] of slotByMon) if (s === slot) slotByMon.delete(m);
@@ -79,6 +85,8 @@ export function toShowdownLog(log: MatchLog): string {
       case 'move_used': {
         const tgt = ev.targets.map((t) => slotByMon.get(t) && ident(t)).filter(Boolean)[0] ?? ident(ev.user);
         lines.push(`|move|${ident(ev.user)}|${ev.move}|${tgt}`);
+        if (PROTECTION_MOVES.has(ev.move)) lines.push(`|-singleturn|${ident(ev.user)}|${ev.move}`); // "protected itself!"
+        lastAttacker = ev.user;
         return;
       }
       case 'damage': {
@@ -138,8 +146,17 @@ export function toShowdownLog(log: MatchLog): string {
       case 'item_or_ability_event':
         lines.push(`|-${ev.kind}|${ident(ev.mon)}|${ev.name}`);
         return;
-      case 'random_outcome':
-        return; // implied; no standalone Showdown message
+      case 'random_outcome': {
+        if (ev.eventKind === 'blocked') {
+          // an attack stopped by Protect / Wide Guard / … → "<mon> protected itself!"
+          lines.push(`|-activate|${ident(ev.mon)}|move: ${ev.outcome}`);
+        } else if (ev.eventKind === 'miss') {
+          lines.push(`|-miss|${lastAttacker ? ident(lastAttacker) : ident(ev.mon)}|${ident(ev.mon)}`);
+        } else if (ev.eventKind === 'flinch') {
+          lines.push(`|cant|${ident(ev.mon)}|flinch`);
+        }
+        return;
+      }
     }
   }
 }

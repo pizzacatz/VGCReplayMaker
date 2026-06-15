@@ -67,6 +67,31 @@ describe('toShowdownLog', () => {
     expect(ko).toContain('|win|very_beeg_rat');
   });
 
+  it('renders protection: -singleturn when used, -activate when an attack is blocked', () => {
+    const out = toShowdownLog({
+      ...LOG,
+      events: [
+        { eventId: 't1', seq: 1, turn: 1, type: 'turn_start' },
+        { eventId: 'pr', seq: 2, turn: 1, type: 'move_used', user: 'gar', move: 'Protect', targets: ['gar'] },
+        { eventId: 'mv', seq: 3, turn: 1, type: 'move_used', user: 'inc', move: 'Flare Blitz', targets: ['gar'] },
+        { eventId: 'bl', seq: 4, turn: 1, type: 'random_outcome', mon: 'gar', eventKind: 'blocked', outcome: 'Protect' },
+      ],
+    });
+    expect(out).toContain('|-singleturn|p2a: Garchomp|Protect'); // "Garchomp protected itself!"
+    expect(out).toContain('|-activate|p2a: Garchomp|move: Protect'); // the blocked attack is shown, not a silent miss
+  });
+
+  it('renders a real accuracy miss as |-miss| (source → target)', () => {
+    const out = toShowdownLog({
+      ...LOG,
+      events: [
+        { eventId: 'mv', seq: 1, turn: 1, type: 'move_used', user: 'inc', move: 'Flare Blitz', targets: ['gar'] },
+        { eventId: 'ms', seq: 2, turn: 1, type: 'random_outcome', mon: 'gar', eventKind: 'miss', outcome: 'yes' },
+      ],
+    });
+    expect(out).toContain('|-miss|p1a: Incineroar|p2a: Garchomp');
+  });
+
   it('renders a faint HP as "0 fnt"', () => {
     const koLog = toShowdownLog({ ...LOG, events: [{ eventId: 'd', seq: 1, turn: 1, type: 'damage', attacker: 'inc', move: 'Flare Blitz', defender: 'gar', hpBefore: 183, hpAfter: 0, crit: false, status: 'clean' }] });
     expect(koLog.includes('|-damage|p2a: Garchomp|0 fnt')).toBe(true);
