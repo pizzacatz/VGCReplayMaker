@@ -639,6 +639,17 @@ export function moveCanFlinch(move: string, attackerItem?: string, attackerAbili
   }
 }
 
+/** A move's sub-hit range if it's multi-hit (Bullet Seed 2–5, Population Bomb 1–10, …), else null. */
+export function moveMultiHit(move: string): { min: number; max: number } | null {
+  try {
+    const m = Dex.moves.get(move) as { multihit?: number | [number, number] };
+    if (!m.multihit) return null;
+    return Array.isArray(m.multihit) ? { min: m.multihit[0], max: m.multihit[1] } : { min: m.multihit, max: m.multihit };
+  } catch {
+    return null;
+  }
+}
+
 export function slotPosition(slot: string): { side: Side; position: Position } {
   return { side: sideOfSlot(slot), position: slot.endsWith('a') ? 0 : 1 };
 }

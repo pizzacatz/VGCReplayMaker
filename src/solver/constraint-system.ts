@@ -52,6 +52,8 @@ export interface SolverHit {
   eventId?: string | undefined;
   /** reconstructed field/boosts/burn at hit time (Doubles); absent → unmodified. */
   context?: HitContext | undefined;
+  /** observed sub-hit count for a multi-hit move (>1 → convolution likelihood). */
+  hits?: number | undefined;
 }
 
 /** A multiplicative speed-control modifier, applied as floor(speed × num / den). */
@@ -397,7 +399,7 @@ export class ConstraintSystem {
       const defender = formeSpec(defenderBase, hit.defenderSpecies);
       const factor = damageFactor(
         gen,
-        { attacker, defender, move: hit.move, observedDamage: hit.observedDamage, crit: hit.crit, context: hit.context },
+        { attacker, defender, move: hit.move, observedDamage: hit.observedDamage, crit: hit.crit, context: hit.context, hits: hit.hits },
         registry,
       );
       const allowed = new Set(factor.feasible.map((p) => `${p.attackerSp},${p.defenderSp}`));

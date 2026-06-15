@@ -41,6 +41,8 @@ export interface DamageEvent extends BaseEvent {
   status: DamageStatus;
   observedEffectiveness?: string;
   note?: string;
+  /** observed sub-hit count for a multi-hit move (the HP delta is the summed total). */
+  hits?: number;
 }
 
 export interface PassiveHpChangeEvent extends BaseEvent {

@@ -16,6 +16,7 @@ import {
   monMaxHp,
   moveCanFlinch,
   moveMakesContact,
+  moveMultiHit,
   moveRecoilDrain,
   nextEventId,
   planTargets,
@@ -41,6 +42,8 @@ interface TargetOutcome {
   missed: boolean;
   ko: boolean;
   status: Cert;
+  /** number of sub-hits for a multi-hit move (the HP delta is the summed total) */
+  hits?: string;
 }
 const blankOutcome = (): TargetOutcome => ({ hpAfter: '', crit: false, flinch: false, missed: false, ko: false, status: 'clean' });
 
@@ -189,6 +192,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   const alreadyMega = (actorBoardSpecies ?? '').includes('-Mega');
   const megaForme = actorBase ? megaFormeFromItem(actorItem, actorBase) : null;
   const canFlinch = move ? moveCanFlinch(move, actorItem, actorAbility) : false;
+  const moveHits = move ? moveMultiHit(move) : null;
 
   const confirmMove = () => {
     if (!actor || !move) return;
@@ -213,7 +217,8 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         const dmg = before - after;
         totalDamage += dmg;
         const eff = effOf(t)?.label ?? '1x'; // derived from the type chart, not entered
-        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit: o.crit, status: o.status, observedEffectiveness: eff }));
+        const nHits = moveHits ? Number(o.hits) || moveHits.max : undefined;
+        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit: o.crit, status: o.status, observedEffectiveness: eff, ...(nHits && nHits > 1 ? { hits: nHits } : {}) }));
         if (after === 0) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target: t })); // auto-faint at 0 HP
         if (canFlinch && o.flinch) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'flinch', outcome: 'yes' }));
         // Sitrus Berry: heals the defender at ≤50% HP (alive)
@@ -415,6 +420,19 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                             <span className="muted">{before} →</span>
                             <input type="number" placeholder="hp after" value={o.ko ? 0 : o.hpAfter} disabled={o.ko} onChange={(e) => setOutcome(t, { hpAfter: e.target.value })} style={{ width: 90 }} />
                             <span className="muted">{o.ko ? `= ${before} dmg (KO)` : o.hpAfter !== '' ? `= ${before - Number(o.hpAfter)} dmg (est — adjust)` : ''}</span>
+                            {moveHits && (
+                              <label className="chip" title={`multi-hit move (${moveHits.min === moveHits.max ? moveHits.max : `${moveHits.min}–${moveHits.max}`}); enter how many times it hit`}>
+                                × hits
+                                <input
+                                  type="number"
+                                  min={moveHits.min}
+                                  max={moveHits.max}
+                                  value={o.hits ?? String(moveHits.max)}
+                                  onChange={(e) => setOutcome(t, { hits: e.target.value })}
+                                  style={{ width: 44, marginLeft: 4 }}
+                                />
+                              </label>
+                            )}
                             <label className="chip" style={{ color: o.ko ? 'var(--bad)' : undefined }}><input type="checkbox" checked={o.ko} onChange={(e) => setOutcome(t, { ko: e.target.checked })} /> KO</label>
                             <label className="chip"><input type="checkbox" checked={o.crit} onChange={(e) => setOutcome(t, { crit: e.target.checked })} /> crit</label>
                             {canFlinch && <label className="chip"><input type="checkbox" checked={o.flinch} onChange={(e) => setOutcome(t, { flinch: e.target.checked })} /> flinched</label>}

@@ -78,6 +78,7 @@ export function extractCleanHits(log: MatchLog): SolverHit[] {
       source: `T${ev.turn}`, // game/round context prepended by the caller (drill-down)
       eventId: ev.eventId, // lets the UI exclude this exact hit
       context: contextAt(log, ev.attacker, ev.defender, ev.seq), // field/boosts/burn (Doubles)
+      ...(ev.hits && ev.hits > 1 ? { hits: ev.hits } : {}), // multi-hit → convolution factor
     });
   }
   return hits;

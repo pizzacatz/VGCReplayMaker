@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { championsGen, predictHit, type MonSpec } from '../engine';
-import { attackerMarginal, damageFactor, defenderMarginal, likelihood } from './damage-factor';
+import { championsGen, predictHit, predictMultiHit, type MonSpec } from '../engine';
+import { attackerMarginal, damageFactor, defenderMarginal, likelihood, multiHitLikelihood } from './damage-factor';
 
 const gen = championsGen();
 
@@ -75,5 +75,27 @@ describe('damageFactor — synthetic recovery & band semantics', () => {
       observedDamage: observedDamage + 100_000,
     });
     expect(impossible.feasible).toHaveLength(0);
+  });
+});
+
+describe('multiHitLikelihood — convolution of sub-hit roll sets', () => {
+  it('is the share of sub-hit combinations summing to the observed total', () => {
+    expect(multiHitLikelihood(11, [[1, 2], [10, 20]])).toBeCloseTo(0.25); // 1+10
+    expect(multiHitLikelihood(22, [[1, 2], [10, 20]])).toBeCloseTo(0.25); // 2+20
+    expect(multiHitLikelihood(99, [[1, 2], [10, 20]])).toBe(0); // unreachable
+    expect(multiHitLikelihood(3, [[1, 2], [1, 2]])).toBeCloseTo(0.5); // 1+2 and 2+1 both reach 3 → 2/4
+  });
+});
+
+describe('multi-hit damage factor (the hits convolution recovers the attacker stat)', () => {
+  const maushold: MonSpec = { species: 'Maushold', alignment: 'neutral' };
+  it('keeps the generating Attack SP feasible for an observed 3-hit total', () => {
+    const TRUE_ATK = 10;
+    const r = predictMultiHit(gen, { attacker: maushold, attackerSp: TRUE_ATK, defender: garchomp, defenderSp: 0, move: 'Population Bomb' }, 3);
+    // a concrete observed total: the median roll of each of the 3 sub-hits, summed
+    const observed = r.perHitRolls.reduce((sum, rolls) => sum + rolls[Math.floor(rolls.length / 2)]!, 0);
+    const factor = damageFactor(gen, { attacker: maushold, defender: garchomp, move: 'Population Bomb', observedDamage: observed, hits: 3 });
+    expect(factor.offensiveStat).toBe('atk');
+    expect(attackerMarginal(factor)).toContain(TRUE_ATK); // truth survives
   });
 });

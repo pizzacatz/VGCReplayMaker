@@ -237,6 +237,69 @@ export function predictHit(
   return { rolls: registry.apply(rolls, ctx), category, offensiveStat, defensiveStat };
 }
 
+export interface MultiHitResult {
+  /** each sub-hit's Champions rolls (15 each); the observed total is a sum across these */
+  perHitRolls: number[][];
+  category: 'Physical' | 'Special';
+  offensiveStat: Exclude<StatKey, 'hp'>;
+  defensiveStat: Exclude<StatKey, 'hp'>;
+}
+
+/**
+ * Predict the per-sub-hit Champions rolls for a multi-hit move (Bullet Seed,
+ * Population Bomb, Triple Axel's escalating power, …). The calc returns one roll
+ * array per sub-hit when given the observed hit count; the convolution of these
+ * (the solver's likelihood) is what matches the observed TOTAL. (Constraint §11.)
+ */
+export function predictMultiHit(
+  gen: Gen,
+  input: HitInput,
+  hits: number,
+  registry: ExceptionRegistry = championsExceptions,
+): MultiHitResult {
+  const move = new Move(gen, input.move, { ...(input.crit ? { isCrit: true } : {}), hits });
+  if (move.category === 'Status') throw new Error(`move ${input.move} is Status — no damage to predict`);
+  const category = move.category as 'Physical' | 'Special';
+  const offensiveStat = OFFENSIVE[category];
+  const defensiveStat = DEFENSIVE[category];
+
+  const hctx = input.context;
+  const attacker = buildMon(gen, input.attacker, offensiveStat, input.attackerSp, {
+    ...(hctx?.attackerBoosts ? { boosts: hctx.attackerBoosts } : {}),
+    ...(hctx?.attackerBurned ? { status: 'brn' } : {}),
+  });
+  const defender = buildMon(gen, input.defender, defensiveStat, input.defenderSp, {
+    ...(hctx?.defenderBoosts ? { boosts: hctx.defenderBoosts } : {}),
+  });
+  const field = hctx
+    ? new Field({
+        gameType: 'Doubles',
+        ...(hctx.weather ? { weather: hctx.weather as never } : {}),
+        ...(hctx.terrain ? { terrain: hctx.terrain as never } : {}),
+        defenderSide: new Side({ isReflect: !!hctx.reflect, isLightScreen: !!hctx.lightScreen, isAuroraVeil: !!hctx.auroraVeil }),
+      })
+    : undefined;
+
+  const damage = (field ? calculate(gen, attacker, defender, move, field) : calculate(gen, attacker, defender, move)).damage;
+  const ctx: ExceptionContext = {
+    move: input.move,
+    attackerSpecies: input.attacker.species,
+    defenderSpecies: input.defender.species,
+    attackerAbility: input.attacker.ability,
+    defenderAbility: input.defender.ability,
+    attackerItem: input.attacker.item,
+    defenderItem: input.defender.item,
+    category,
+    crit: input.crit,
+  };
+  // 2-D = one roll array per sub-hit; 1-D = the move resolved as a single hit.
+  const perHitRolls =
+    Array.isArray(damage) && Array.isArray(damage[0])
+      ? (damage as number[][]).map((sub) => registry.apply(toChampionsRolls(sub), ctx))
+      : [registry.apply(toChampionsRolls(damage as number | number[]), ctx)];
+  return { perHitRolls, category, offensiveStat, defensiveStat };
+}
+
 /** Convenience: the Champions-configured Gen 9 generation. */
 export function championsGen(): Gen {
   return Generations.get(CHAMPIONS_GEN);

@@ -73,6 +73,8 @@ export interface GameHit {
   eventId?: string;
   /** reconstructed field/boosts/burn at hit time. */
   context?: HitContext;
+  /** observed sub-hit count for a multi-hit move. */
+  hits?: number;
 }
 
 export interface GameSpeedFact {
@@ -189,6 +191,7 @@ export class ScoutingDB {
           ...(hit.source ? { source: hit.source } : {}),
           ...(hit.eventId ? { eventId: hit.eventId } : {}),
           ...(hit.context ? { context: hit.context } : {}),
+          ...(hit.hits ? { hits: hit.hits } : {}),
         });
       }
       for (const sf of game.speedFacts ?? []) {

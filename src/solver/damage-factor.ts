@@ -17,7 +17,7 @@
  * top of this factor in later slices.
  */
 
-import { predictHit, type Gen, type HitContext, type HitInput, type MonSpec } from '../engine';
+import { predictHit, predictMultiHit, type Gen, type HitContext, type HitInput, type MonSpec } from '../engine';
 import { championsExceptions, type ExceptionRegistry } from '../engine';
 import { SP_MAX, SP_MIN } from '../conversion';
 
@@ -29,6 +29,23 @@ export function likelihood(observedDamage: number, rolls: readonly number[]): nu
   return matches / rolls.length;
 }
 
+/**
+ * Likelihood of an observed TOTAL for a multi-hit move: the convolution of each
+ * sub-hit's independent roll distribution. Computed as a DP over reachable sums,
+ * so it's cheap even at 10 hits. P(total) = (#combos summing to total) / ∏|Rᵢ|.
+ */
+export function multiHitLikelihood(observedTotal: number, perHitRolls: number[][]): number {
+  if (perHitRolls.some((r) => r.length === 0)) return 0;
+  let dist = new Map<number, number>([[0, 1]]);
+  for (const rolls of perHitRolls) {
+    const next = new Map<number, number>();
+    for (const [sum, count] of dist) for (const r of rolls) next.set(sum + r, (next.get(sum + r) ?? 0) + count);
+    dist = next;
+  }
+  const total = perHitRolls.reduce((p, r) => p * r.length, 1);
+  return (dist.get(observedTotal) ?? 0) / total;
+}
+
 export interface CleanHit {
   attacker: MonSpec;
   defender: MonSpec;
@@ -38,6 +55,8 @@ export interface CleanHit {
   crit?: boolean | undefined;
   /** reconstructed field/boosts/burn at hit time */
   context?: HitContext | undefined;
+  /** observed number of sub-hits for a multi-hit move (>1 → convolution likelihood) */
+  hits?: number | undefined;
 }
 
 export interface FeasiblePair {
@@ -77,6 +96,7 @@ export function damageFactor(
   let defensiveStat = '';
   let scanned = 0;
 
+  const multiHit = hit.hits !== undefined && hit.hits > 1;
   for (let attackerSp = SP_MIN; attackerSp <= SP_MAX; attackerSp++) {
     for (let defenderSp = SP_MIN; defenderSp <= SP_MAX; defenderSp++) {
       const input: HitInput = {
@@ -88,11 +108,19 @@ export function damageFactor(
         crit: hit.crit,
         context: hit.context,
       };
-      const { rolls, offensiveStat: off, defensiveStat: def } = predictHit(gen, input, registry);
-      offensiveStat = off;
-      defensiveStat = def;
+      let weight: number;
+      if (multiHit) {
+        const r = predictMultiHit(gen, input, hit.hits!, registry);
+        offensiveStat = r.offensiveStat;
+        defensiveStat = r.defensiveStat;
+        weight = multiHitLikelihood(hit.observedDamage, r.perHitRolls); // observed = the summed total
+      } else {
+        const { rolls, offensiveStat: off, defensiveStat: def } = predictHit(gen, input, registry);
+        offensiveStat = off;
+        defensiveStat = def;
+        weight = likelihood(hit.observedDamage, rolls);
+      }
       scanned++;
-      const weight = likelihood(hit.observedDamage, rolls);
       if (weight > 0) feasible.push({ attackerSp, defenderSp, weight });
     }
   }

@@ -38,6 +38,7 @@ export function logToGame(log: MatchLog, meta: GameMeta, gen: Gen, specs: Map<st
     ...(h.source ? { source: h.source } : {}),
     ...(h.eventId ? { eventId: h.eventId } : {}),
     ...(h.context ? { context: h.context } : {}),
+    ...(h.hits ? { hits: h.hits } : {}),
   }));
 
   const speedFacts: GameSpeedFact[] = extractSpeedFacts(log, gen, specs).facts.map((f) => ({
