@@ -1,9 +1,10 @@
 /** UI model tests — smart targeting + mega forme lookup (the new UX helpers). */
 
 import { describe, it, expect } from 'vitest';
-import type { MatchLog } from '../log';
+import type { MatchEvent, MatchLog } from '../log';
+import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { megaFormesFor, planTargets } from './model';
+import { broughtInfo, leadMonIds, megaFormesFor, planTargets, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -45,5 +46,47 @@ describe('megaFormesFor — dex-validated, no invented data', () => {
   it('finds mega formes where they exist', () => {
     expect(megaFormesFor('Charizard').sort()).toEqual(['Charizard-Mega-X', 'Charizard-Mega-Y']);
     expect(megaFormesFor('Incineroar')).toEqual([]); // no mega
+  });
+});
+
+const pm = (species: string): ParsedMon => ({ species, level: 50, moves: [], alignment: 'neutral', spreadKnown: false, flags: [] });
+const entry = (side: string, i: number, species: string): MonEntry => ({ monId: `${side}${i}`, parsed: pm(species), observedMaxHp: 175 });
+const sixMon = (side: string): MonEntry[] => ['Garchomp', 'Annihilape', 'Zapdos', 'Giratina', 'Incineroar', 'Dragonite'].map((s, i) => entry(side, i, s));
+const wsWith = (leadsB: string[], events: MatchEvent[]): Workspace => ({
+  sideA: { player: 'W', rawPaste: '', mons: sixMon('A'), leads: ['A0', 'A1'] },
+  sideB: { player: 'O', rawPaste: '', mons: sixMon('B'), leads: leadsB },
+  events,
+});
+
+describe('leadMonIds — selectable, falls back to first two', () => {
+  it('uses explicit leads, else the first two', () => {
+    expect(leadMonIds(wsWith(['B2', 'B4'], []).sideB)).toEqual(['B2', 'B4']);
+    expect(leadMonIds(wsWith([], []).sideB)).toEqual(['B0', 'B1']);
+  });
+});
+
+describe('broughtInfo — process of elimination for the bring', () => {
+  const sw = (seq: number, monId: string): MatchEvent => ({ eventId: `s${seq}`, seq, turn: 1, type: 'switch', side: 'B', position: 0, in: monId });
+
+  it('leads alone leave the rest unknown (possibly brought)', () => {
+    const info = broughtInfo(wsWith(['B0', 'B1'], []), 'B');
+    expect(info.brought).toEqual(['B0', 'B1']);
+    expect(info.confirmed).toBe(false);
+    expect(info.unknown.sort()).toEqual(['B2', 'B3', 'B4', 'B5']);
+    expect(info.notBrought).toEqual([]);
+  });
+
+  it('two switch-ins complete the bring → the other two are deduced NOT brought', () => {
+    const info = broughtInfo(wsWith(['B0', 'B1'], [sw(2, 'B2'), sw(3, 'B3')]), 'B');
+    expect(info.brought.sort()).toEqual(['B0', 'B1', 'B2', 'B3']);
+    expect(info.confirmed).toBe(true);
+    expect(info.notBrought.sort()).toEqual(['B4', 'B5']);
+    expect(info.unknown).toEqual([]);
+  });
+
+  it('switching a lead back in does not double-count', () => {
+    const info = broughtInfo(wsWith(['B0', 'B1'], [sw(2, 'B2'), sw(3, 'B0')]), 'B');
+    expect(info.brought.sort()).toEqual(['B0', 'B1', 'B2']);
+    expect(info.confirmed).toBe(false); // only 3 distinct seen
   });
 });

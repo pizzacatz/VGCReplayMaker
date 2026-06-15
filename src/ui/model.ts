@@ -23,6 +23,8 @@ export interface SideState {
   player: string;
   rawPaste: string;
   mons: MonEntry[];
+  /** the two starting Pokémon (positions 0/1). Defaults to the first two; user-selectable. */
+  leads?: string[];
 }
 
 export interface Workspace {
@@ -33,10 +35,16 @@ export interface Workspace {
 
 export function emptyWorkspace(): Workspace {
   return {
-    sideA: { player: 'You', rawPaste: '', mons: [] },
-    sideB: { player: 'Opponent', rawPaste: '', mons: [] },
+    sideA: { player: 'You', rawPaste: '', mons: [], leads: [] },
+    sideB: { player: 'Opponent', rawPaste: '', mons: [], leads: [] },
     events: [],
   };
+}
+
+/** The two starting mon ids for a side (selected leads, or the first two as a fallback). */
+export function leadMonIds(side: SideState): string[] {
+  const valid = (side.leads ?? []).filter((id) => side.mons.some((m) => m.monId === id));
+  return valid.length ? valid.slice(0, 2) : side.mons.slice(0, 2).map((m) => m.monId);
 }
 
 export type SideId = 'A' | 'B';
@@ -87,8 +95,8 @@ export function toSpec(parsed: ParsedMon): MonSpec {
 export function buildLog(ws: Workspace): MatchLog {
   const sheet = (m: MonEntry) => ({ monId: m.monId, species: m.parsed.species, maxHp: m.observedMaxHp, ...(m.parsed.nickname ? { nickname: m.parsed.nickname } : {}) });
   const leads = [
-    ...ws.sideA.mons.slice(0, 2).map((m, i) => ({ side: 'A' as const, position: i as Position, monId: m.monId })),
-    ...ws.sideB.mons.slice(0, 2).map((m, i) => ({ side: 'B' as const, position: i as Position, monId: m.monId })),
+    ...leadMonIds(ws.sideA).map((monId, i) => ({ side: 'A' as const, position: i as Position, monId })),
+    ...leadMonIds(ws.sideB).map((monId, i) => ({ side: 'B' as const, position: i as Position, monId })),
   ];
   return {
     matchId: 'workspace',
@@ -224,4 +232,41 @@ export function megaFormesFor(species: string): string[] {
 
 export function slotPosition(slot: string): { side: Side; position: Position } {
   return { side: sideOfSlot(slot), position: slot.endsWith('a') ? 0 : 1 };
+}
+
+export const BRING_COUNT = 4; // Champions: bring 4 of 6 (resolved decision)
+
+export interface BroughtInfo {
+  /** mon ids known to be brought (leads + everything switched in) */
+  brought: string[];
+  /** mon ids deduced NOT brought (only once the full bring is known) */
+  notBrought: string[];
+  /** mon ids still unknown (could be brought) */
+  unknown: string[];
+  /** true once 4 distinct mons have been seen → the bring is fully determined */
+  confirmed: boolean;
+}
+
+/**
+ * Process of elimination for the bring (DATA_MODEL §2.3). A mon is "brought" once
+ * it appears (lead or switch-in). Once 4 distinct mons are seen for a side, the
+ * remaining roster mons are deduced NOT brought — and conversely, if only 2
+ * roster mons are left unseen they may still be the missing brought pair.
+ */
+export function broughtInfo(ws: Workspace, side: Side): BroughtInfo {
+  const sideState = side === 'A' ? ws.sideA : ws.sideB;
+  const leads = leadMonIds(sideState);
+  const switchedIn = ws.events
+    .filter((e): e is Extract<MatchEvent, { type: 'switch' }> => e.type === 'switch' && e.side === side)
+    .map((e) => e.in);
+  const broughtSet = new Set([...leads, ...switchedIn].filter((id) => sideState.mons.some((m) => m.monId === id)));
+  const brought = sideState.mons.filter((m) => broughtSet.has(m.monId)).map((m) => m.monId);
+  const confirmed = brought.length >= BRING_COUNT;
+  const rest = sideState.mons.filter((m) => !broughtSet.has(m.monId)).map((m) => m.monId);
+  return {
+    brought,
+    notBrought: confirmed ? rest : [],
+    unknown: confirmed ? [] : rest,
+    confirmed,
+  };
 }

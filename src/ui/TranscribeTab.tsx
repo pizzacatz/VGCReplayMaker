@@ -14,6 +14,7 @@ import {
   type Workspace,
 } from './model';
 import { AdvancedEvents } from './AdvancedEvents';
+import { MatchSetup } from './MatchSetup';
 
 type Mode = 'idle' | 'move' | 'switch' | 'mega';
 
@@ -124,6 +125,8 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   return (
     <div className="row">
       <div className="col panel">
+        <MatchSetup ws={ws} setWs={setWs} startOpen={ws.events.length === 0} />
+
         <div className="controls">
           <strong>Turn {currentTurn}</strong>
           <button onClick={newTurn}>▶ New turn</button>
