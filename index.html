@@ -1,11 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" translate="no">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Prevent browser auto-translate (Google Translate etc.) from mutating text
+         nodes out from under React, which causes "removeChild ... not a child" crashes. -->
+    <meta name="google" content="notranslate" />
     <title>Champions Match Analysis</title>
   </head>
-  <body>
+  <body class="notranslate">
     <div id="root"></div>
     <script type="module" src="/src/ui/main.tsx"></script>
   </body>

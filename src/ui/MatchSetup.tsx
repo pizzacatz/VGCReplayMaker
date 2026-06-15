@@ -84,8 +84,7 @@ function SideSetup({
                       : 'not yet seen'
               }
             >
-              {m.parsed.species}
-              {isLead ? ` ◀${pos === 0 ? 'L' : 'R'}` : st === 'brought' ? ' ✓' : st === 'not' ? ' ✗' : ''}
+              {m.parsed.species + (isLead ? ` ◀${pos === 0 ? 'L' : 'R'}` : st === 'brought' ? ' ✓' : st === 'not' ? ' ✗' : '')}
             </button>
           );
         })}

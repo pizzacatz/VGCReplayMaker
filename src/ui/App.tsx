@@ -36,7 +36,7 @@ export function App() {
   ];
 
   return (
-    <div className="app">
+    <div className="app notranslate" translate="no">
       <h1>Champions Match Analysis</h1>
       <p className="muted">
         Single-user scouting tool · Regulation M-A · open sheets. Honest about what the data proves vs. guesses.
