@@ -387,6 +387,22 @@ export function selectGame(store: ScoutingStore, gameId: string): ScoutingStore 
   return { ...store, activeGameId: gameId };
 }
 
+/** Move a game earlier (delta -1) or later (delta +1) in the set; gameNumbers follow position. */
+export function moveGame(store: ScoutingStore, gameId: string, delta: number): ScoutingStore {
+  const t = activeTournament(store);
+  const match = activeMatch(store);
+  if (!t || !match) return store;
+  const idx = match.games.findIndex((g) => g.gameId === gameId);
+  const to = idx + delta;
+  if (idx < 0 || to < 0 || to >= match.games.length) return store;
+  const games = [...match.games];
+  const [moved] = games.splice(idx, 1);
+  games.splice(to, 0, moved!);
+  const renumbered = games.map((g, i) => ({ ...g, gameNumber: i + 1 }));
+  const nextMatch: Match = { ...match, games: renumbered };
+  return replaceTournament(store, { ...t, matches: t.matches.map((m) => (m.matchId === match.matchId ? nextMatch : m)) });
+}
+
 export function deleteGame(store: ScoutingStore, gameId: string): ScoutingStore {
   const t = activeTournament(store);
   const match = activeMatch(store);

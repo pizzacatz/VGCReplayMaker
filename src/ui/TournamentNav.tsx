@@ -8,6 +8,7 @@ import {
   addTournament,
   deleteGame,
   matchStanding,
+  moveGame,
   renameTournament,
   selectGame,
   selectMatch,
@@ -102,17 +103,38 @@ export function TournamentNav({ store, setStore }: { store: ScoutingStore; setSt
       {/* Games row */}
       <div className="controls">
         <strong>Games</strong>
-        {match.games.map((g) => {
+        {match.games.map((g, i) => {
           const mark = g.result ? (g.result.winner === 'A' ? `${teamA?.player ?? 'A'} ✓` : `${teamB?.player ?? 'B'} ✓`) : '…';
           return (
-            <button
-              key={g.gameId}
-              className={g.gameId === game.gameId ? 'active' : ''}
-              onClick={() => setStore(selectGame(store, g.gameId))}
-              title={g.result ? `won by ${g.result.reason}` : 'in progress'}
-            >
-              Game {g.gameNumber} <span className="muted">· {mark}</span>
-            </button>
+            <span key={g.gameId} style={{ display: 'inline-flex', alignItems: 'center' }}>
+              {match.games.length > 1 && (
+                <button
+                  onClick={() => setStore(moveGame(store, g.gameId, -1))}
+                  disabled={i === 0}
+                  title="move this game earlier in the set"
+                  style={{ padding: '2px 5px' }}
+                >
+                  ◀
+                </button>
+              )}
+              <button
+                className={g.gameId === game.gameId ? 'active' : ''}
+                onClick={() => setStore(selectGame(store, g.gameId))}
+                title={g.result ? `won by ${g.result.reason}` : 'in progress'}
+              >
+                Game {g.gameNumber} <span className="muted">· {mark}</span>
+              </button>
+              {match.games.length > 1 && (
+                <button
+                  onClick={() => setStore(moveGame(store, g.gameId, 1))}
+                  disabled={i === match.games.length - 1}
+                  title="move this game later in the set"
+                  style={{ padding: '2px 5px' }}
+                >
+                  ▶
+                </button>
+              )}
+            </span>
           );
         })}
         <button onClick={() => setStore(addGame(store))} title="Add the next game in this set">＋ Game</button>

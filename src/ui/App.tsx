@@ -55,7 +55,11 @@ export function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${t?.name || 'tournament'}.json`.replace(/\s+/g, '_');
+    // "Tournament - Round - P1 vs P2.json" (labels the active context; the file holds the whole store)
+    const p1 = teamById(t, match?.teamAId ?? '')?.player ?? ws.sideA.player;
+    const p2 = teamById(t, match?.teamBId ?? '')?.player ?? ws.sideB.player;
+    const label = [t?.name, match?.round, `${p1} vs ${p2}`].filter(Boolean).join(' - ');
+    a.download = `${(label || 'tournament').replace(/[/\\:*?"<>|]/g, '').replace(/\s+/g, ' ').trim()}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };

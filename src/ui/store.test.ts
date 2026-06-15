@@ -6,6 +6,7 @@ import {
   deriveWorkspace,
   emptyStore,
   matchStanding,
+  moveGame,
   setMatchField,
   standingLabel,
   storeFromLegacyWorkspace,
@@ -162,6 +163,30 @@ describe('addMatch reuses or creates teams', () => {
     expect(t.matches).toHaveLength(2);
     expect(t.teams.some((x) => x.player === 'Carol')).toBe(true);
     expect(t.matches[1]!.teamAId).toBe(aId); // same team object reused
+  });
+});
+
+describe('moveGame reorders + renumbers (the "this is actually Game 2" workflow)', () => {
+  it('pushing the transcribed game later makes it Game 2 and keeps its events', () => {
+    let store = emptyStore();
+    store = applyWorkspace(store, {
+      ...deriveWorkspace(store),
+      events: [{ eventId: 'e1', seq: 1, turn: 1, type: 'move_used', user: 'A0', move: 'Protect', targets: ['A0'] }],
+    });
+    const transcribedId = store.activeGameId;
+    store = addGame(store); // new empty game appended (Game 2), now active
+    store = moveGame(store, transcribedId, 1); // push the transcribed game to the later slot
+    const games = store.tournaments[0]!.matches[0]!.games;
+    expect(games.map((g) => g.gameNumber)).toEqual([1, 2]);
+    const moved = games.find((g) => g.gameId === transcribedId)!;
+    expect(moved.gameNumber).toBe(2); // it's now Game 2
+    expect(moved.events).toHaveLength(1); // transcription preserved
+    expect(games[0]!.events).toHaveLength(0); // the new Game 1 is the empty one to transcribe
+  });
+
+  it('is a no-op at the ends', () => {
+    const store = emptyStore();
+    expect(moveGame(store, store.activeGameId, -1)).toBe(store); // single game, can't move earlier
   });
 });
 
