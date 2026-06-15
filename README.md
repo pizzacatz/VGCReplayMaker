@@ -10,9 +10,18 @@ One event log, read two ways: the **solver** consumes only `clean` damage events
 
 ## Status
 
-Design-complete; implementation starting. The spec set is locked (see the document index in [`CONSOLIDATION_RECORD.md`](CONSOLIDATION_RECORD.md)) and all decision-level open questions are resolved (see [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) "A — RESOLVED").
+Implemented end-to-end. The full pipeline — pokepaste import, transcription, the reverse-engineering solver (with honest tagging), aggregation across games, and replay — is built and tested (`npm test`, 93 tests). A local web UI ties it together.
 
-**Current step:** verification spike — confirming the `@pkmn`/Smogon ecosystem can be configured for Champions data, the 15-roll (86–100%) table, and the flagged constant exceptions, before any production code (OPEN_QUESTIONS §C).
+## Running the app
+
+```sh
+npm install
+npm run dev      # local app at http://localhost:5173
+npm test         # the headless test suite
+npm run build    # production bundle
+```
+
+The UI has four tabs: **Teams** (paste both teams; omit a spread to have it solved), **Transcribe** (log the match event by event, with reconstructed-state confirmation), **Solve** (reverse-engineer spreads with per-stat `read`/`locked`/`bounded`/`guessed` tags + missing-evidence notes), and **Replay** (step the match forward/backward with live HP/board).
 
 ## Stack
 
