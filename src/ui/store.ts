@@ -636,6 +636,7 @@ export function solveTournament(t: Tournament): Map<string, InstanceReport> {
         ...(h.defenderSpecies ? { defenderSpecies: h.defenderSpecies } : {}),
         source: `${match.round} G${game.gameNumber}${h.source ? ` · ${h.source}` : ''}`, // full provenance
         ...(h.eventId ? { eventId: h.eventId } : {}),
+        ...(h.context ? { context: h.context } : {}),
       }));
       const speedFacts: GameSpeedFact[] = extractSpeedFacts(log, gen, specs).facts.map((f) => ({
         first: ref(f.first),

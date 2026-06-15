@@ -33,6 +33,11 @@ export function logToGame(log: MatchLog, meta: GameMeta, gen: Gen, specs: Map<st
     move: h.move,
     observedDamage: h.observedDamage,
     ...(h.crit !== undefined ? { crit: h.crit } : {}),
+    ...(h.attackerSpecies ? { attackerSpecies: h.attackerSpecies } : {}),
+    ...(h.defenderSpecies ? { defenderSpecies: h.defenderSpecies } : {}),
+    ...(h.source ? { source: h.source } : {}),
+    ...(h.eventId ? { eventId: h.eventId } : {}),
+    ...(h.context ? { context: h.context } : {}),
   }));
 
   const speedFacts: GameSpeedFact[] = extractSpeedFacts(log, gen, specs).facts.map((f) => ({
@@ -40,6 +45,8 @@ export function logToGame(log: MatchLog, meta: GameMeta, gen: Gen, specs: Map<st
     second: ref(f.second),
     samePriorityBracket: f.samePriorityBracket,
     ...(f.trickRoom !== undefined ? { trickRoom: f.trickRoom } : {}),
+    ...(f.firstSpecies ? { firstSpecies: f.firstSpecies } : {}),
+    ...(f.secondSpecies ? { secondSpecies: f.secondSpecies } : {}),
   }));
 
   return {

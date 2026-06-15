@@ -181,3 +181,25 @@ describe('Mega forme — post-Mega hits use the Mega forme stats (extraction)', 
     expect(hits[0]!.attackerSpecies).toBe('Mawile-Mega'); // forme-at-hit-time captured
   });
 });
+
+describe('Field/boosts reconstruction (extraction)', () => {
+  it('tags a hit with the weather, screen, and attacker boosts active at that moment', () => {
+    const log: MatchLog = {
+      matchId: 'ctx', format: 'Champions Reg M-A',
+      sideA: { player: 'W', mons: [{ monId: 'inc', species: 'Incineroar', maxHp: 170 }] },
+      sideB: { player: 'O', mons: [{ monId: 'gar', species: 'Garchomp', maxHp: 183 }] },
+      leads: [{ side: 'A', position: 0, monId: 'inc' }, { side: 'B', position: 0, monId: 'gar' }],
+      events: [
+        { eventId: 'w', seq: 1, turn: 1, type: 'field_change', field: 'Sun', action: 'set' },
+        { eventId: 'r', seq: 2, turn: 1, type: 'field_change', field: 'Reflect', action: 'set', side: 'B' },
+        { eventId: 'sd', seq: 3, turn: 1, type: 'stat_stage_change', target: 'inc', stat: 'atk', stages: 2 },
+        { eventId: 'm', seq: 4, turn: 1, type: 'move_used', user: 'inc', move: 'Flare Blitz', targets: ['gar'] },
+        { eventId: 'd', seq: 5, turn: 1, type: 'damage', attacker: 'inc', move: 'Flare Blitz', defender: 'gar', hpBefore: 183, hpAfter: 120, crit: false, status: 'clean' },
+      ],
+    };
+    const hit = extractCleanHits(log)[0]!;
+    expect(hit.context?.weather).toBe('Sun');
+    expect(hit.context?.reflect).toBe(true); // Reflect on the DEFENDER's side
+    expect(hit.context?.attackerBoosts).toEqual({ atk: 2 });
+  });
+});

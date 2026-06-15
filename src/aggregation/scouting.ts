@@ -11,7 +11,7 @@
  * couples them in the global system (§5).
  */
 
-import { championsGen, type MonSpec } from '../engine';
+import { championsGen, type HitContext, type MonSpec } from '../engine';
 import {
   ConstraintSystem,
   NON_HP_STATS,
@@ -71,6 +71,8 @@ export interface GameHit {
   source?: string;
   /** the originating damage event's id (for per-hit exclude). */
   eventId?: string;
+  /** reconstructed field/boosts/burn at hit time. */
+  context?: HitContext;
 }
 
 export interface GameSpeedFact {
@@ -186,6 +188,7 @@ export class ScoutingDB {
           ...(hit.defenderSpecies ? { defenderSpecies: hit.defenderSpecies } : {}),
           ...(hit.source ? { source: hit.source } : {}),
           ...(hit.eventId ? { eventId: hit.eventId } : {}),
+          ...(hit.context ? { context: hit.context } : {}),
         });
       }
       for (const sf of game.speedFacts ?? []) {

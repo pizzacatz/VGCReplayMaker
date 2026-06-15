@@ -202,3 +202,18 @@ describe('Contradiction pinpoint', () => {
     expect(D_report.contradictionStat).toBe('def'); // Flare Blitz is physical → the conflict is on Def
   }, SLOW);
 });
+
+describe('Field & boosts in the damage factor', () => {
+  it('a hit dealt under +2 Attack is solved WITH the boost (low Attack SP), not without it', () => {
+    const ctx = { attackerBoosts: { atk: 2 } };
+    const rolls = predictHit(gen, { attacker: incineroar, attackerSp: 8, defender: garchomp, defenderSp: 8, move: 'Flare Blitz', context: ctx }).rolls;
+    const observed = rolls[7]!;
+    const A: SolverMon = { id: 'A', spec: incineroar, observedMaxHp: 95 + 75 };
+    const D: SolverMon = { id: 'D', spec: garchomp, observedMaxHp: 183 };
+    const hit = { attackerId: 'A', defenderId: 'D', move: 'Flare Blitz', observedDamage: observed };
+    const withCtx = new ConstraintSystem(gen, [A, D], [{ ...hit, context: ctx }]).propagate();
+    const without = new ConstraintSystem(gen, [A, D], [{ ...hit }]).propagate(); // wrongly ignores the boost
+    expect(withCtx.domains.get('A')!.get('atk')!).toContain(8); // boost explains the damage at low SP
+    expect(without.domains.get('A')!.get('atk')!).not.toContain(8); // ignoring it demands far more Attack
+  }, SLOW);
+});

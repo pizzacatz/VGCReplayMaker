@@ -17,7 +17,7 @@
  * top of this factor in later slices.
  */
 
-import { predictHit, type Gen, type HitInput, type MonSpec } from '../engine';
+import { predictHit, type Gen, type HitContext, type HitInput, type MonSpec } from '../engine';
 import { championsExceptions, type ExceptionRegistry } from '../engine';
 import { SP_MAX, SP_MIN } from '../conversion';
 
@@ -36,6 +36,8 @@ export interface CleanHit {
   /** exact observed integer damage = hp_before − hp_after (Constitution §C3) */
   observedDamage: number;
   crit?: boolean | undefined;
+  /** reconstructed field/boosts/burn at hit time */
+  context?: HitContext | undefined;
 }
 
 export interface FeasiblePair {
@@ -84,6 +86,7 @@ export function damageFactor(
         defenderSp,
         move: hit.move,
         crit: hit.crit,
+        context: hit.context,
       };
       const { rolls, offensiveStat: off, defensiveStat: def } = predictHit(gen, input, registry);
       offensiveStat = off;

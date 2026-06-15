@@ -8,9 +8,47 @@
  */
 
 import { toID } from '@smogon/calc';
-import type { Gen, MonSpec } from '../engine';
+import type { Gen, HitContext, MonSpec } from '../engine';
 import type { SolverHit } from '../solver';
 import type { MatchEvent, MatchLog, Side } from '../log';
+
+const WEATHERS = ['Sun', 'Rain', 'Sand', 'Snow', 'Hail'];
+const TERRAINS: Record<string, string> = { 'Grassy Terrain': 'Grassy', 'Electric Terrain': 'Electric', 'Psychic Terrain': 'Psychic', 'Misty Terrain': 'Misty' };
+
+const sideOfMon = (log: MatchLog, monId: string): Side => (log.sideA.mons.some((m) => m.monId === monId) ? 'A' : 'B');
+
+/** Net boost stages on a mon just before `seq` (reset when it switches in/out). */
+function boostsAt(log: MatchLog, monId: string, seq: number): Record<string, number> {
+  let boosts: Record<string, number> = {};
+  for (const ev of [...log.events].sort((a, b) => a.seq - b.seq)) {
+    if (ev.seq >= seq) break;
+    if (ev.type === 'switch' && (ev.out === monId || ev.in === monId)) boosts = {};
+    if (ev.type === 'stat_stage_change' && ev.target === monId) {
+      boosts[ev.stat] = Math.max(-6, Math.min(6, (boosts[ev.stat] ?? 0) + ev.stages));
+    }
+  }
+  return boosts;
+}
+
+/** The reconstructed field/boosts/burn at the moment of a hit (always Doubles). */
+function contextAt(log: MatchLog, attacker: string, defender: string, seq: number): HitContext {
+  const dSide = sideOfMon(log, defender);
+  const weather = WEATHERS.find((w) => isActiveAt(log, w, undefined, seq));
+  let terrain: string | undefined;
+  for (const [field, calc] of Object.entries(TERRAINS)) if (isActiveAt(log, field, undefined, seq)) terrain = calc;
+  const aBoosts = boostsAt(log, attacker, seq);
+  const dBoosts = boostsAt(log, defender, seq);
+  return {
+    ...(weather ? { weather } : {}),
+    ...(terrain ? { terrain } : {}),
+    ...(isActiveAt(log, 'Reflect', dSide, seq) ? { reflect: true } : {}),
+    ...(isActiveAt(log, 'Light Screen', dSide, seq) ? { lightScreen: true } : {}),
+    ...(isActiveAt(log, 'Aurora Veil', dSide, seq) ? { auroraVeil: true } : {}),
+    ...(Object.keys(aBoosts).length ? { attackerBoosts: aBoosts } : {}),
+    ...(Object.keys(dBoosts).length ? { defenderBoosts: dBoosts } : {}),
+    ...(isStatusAt(log, attacker, 'brn', seq) ? { attackerBurned: true } : {}),
+  };
+}
 
 /** The Mega forme a mon is in just before `seq` (a mon can't un-Mega), else undefined. */
 function megaFormeAt(log: MatchLog, monId: string, seq: number): string | undefined {
@@ -39,6 +77,7 @@ export function extractCleanHits(log: MatchLog): SolverHit[] {
       ...(dForme ? { defenderSpecies: dForme } : {}),
       source: `T${ev.turn}`, // game/round context prepended by the caller (drill-down)
       eventId: ev.eventId, // lets the UI exclude this exact hit
+      context: contextAt(log, ev.attacker, ev.defender, ev.seq), // field/boosts/burn (Doubles)
     });
   }
   return hits;

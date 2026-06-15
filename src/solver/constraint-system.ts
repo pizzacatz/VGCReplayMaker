@@ -20,7 +20,7 @@
  * pair fused (wide marginals); a second matchup sharing a variable separates them.
  */
 
-import { baseStatOf, championsExceptions, primaryAbilityOf, roleOf, type ExceptionRegistry, type Gen, type MonSpec } from '../engine';
+import { baseStatOf, championsExceptions, primaryAbilityOf, roleOf, type ExceptionRegistry, type Gen, type HitContext, type MonSpec } from '../engine';
 import { maxHpToSpHp, spToFinal, SP_BUDGET, SP_MAX, SP_MIN, type StatKey } from '../conversion';
 import { damageFactor } from './damage-factor';
 import { structuralPrior, type SpreadPrior } from './prior';
@@ -50,6 +50,8 @@ export interface SolverHit {
   source?: string | undefined;
   /** the originating damage event's id — lets the UI exclude this exact hit. */
   eventId?: string | undefined;
+  /** reconstructed field/boosts/burn at hit time (Doubles); absent → unmodified. */
+  context?: HitContext | undefined;
 }
 
 /** A multiplicative speed-control modifier, applied as floor(speed × num / den). */
@@ -395,7 +397,7 @@ export class ConstraintSystem {
       const defender = formeSpec(defenderBase, hit.defenderSpecies);
       const factor = damageFactor(
         gen,
-        { attacker, defender, move: hit.move, observedDamage: hit.observedDamage, crit: hit.crit },
+        { attacker, defender, move: hit.move, observedDamage: hit.observedDamage, crit: hit.crit, context: hit.context },
         registry,
       );
       const allowed = new Set(factor.feasible.map((p) => `${p.attackerSp},${p.defenderSp}`));

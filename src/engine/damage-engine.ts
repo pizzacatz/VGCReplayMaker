@@ -10,7 +10,7 @@
  * cross-checked against it and a divergence is raised, never silently accepted.
  */
 
-import { Generations, Move, Pokemon, calculate, toID } from '@smogon/calc';
+import { Field, Generations, Move, Pokemon, Side, calculate, toID } from '@smogon/calc';
 import { spToEv, spToFinal, type AlignmentRole } from '../conversion';
 import type { StatKey } from '../conversion';
 import {
@@ -35,6 +35,26 @@ export interface MonSpec {
   level?: number | undefined; // default 50
 }
 
+/**
+ * Reconstructed board state at the moment of a hit (Event Schema v2 §6). Always
+ * Doubles. Boosts/burn/field don't change the raw stat (R5 guard stays valid) —
+ * they apply inside the damage calc. Threaded from the event log by extraction.
+ */
+export interface HitContext {
+  /** calc weather name: 'Sun' | 'Rain' | 'Sand' | 'Snow' | 'Hail' */
+  weather?: string | undefined;
+  /** calc terrain name: 'Grassy' | 'Electric' | 'Psychic' | 'Misty' */
+  terrain?: string | undefined;
+  reflect?: boolean | undefined;
+  lightScreen?: boolean | undefined;
+  auroraVeil?: boolean | undefined;
+  /** full boost record per mon (calc uses the relevant stat for this hit) */
+  attackerBoosts?: Record<string, number> | undefined;
+  defenderBoosts?: Record<string, number> | undefined;
+  /** attacker burned → physical attack halved */
+  attackerBurned?: boolean | undefined;
+}
+
 export interface HitInput {
   attacker: MonSpec;
   /** candidate SP in the move's relevant offensive stat (atk for physical, spa for special) */
@@ -44,8 +64,8 @@ export interface HitInput {
   defenderSp: number;
   move: string;
   crit?: boolean | undefined;
-  // Later slices: boosts, weather/terrain/screens, spread flag, status — the
-  // reconstructed state (Event Schema v2 §6). Wired through Field as they land.
+  /** reconstructed field/boosts/burn at hit time; absent → no field (Singles, unmodified). */
+  context?: HitContext | undefined;
 }
 
 /** Standard nature table (game-universal, not Champions-specific): up → down → name. */
@@ -117,7 +137,13 @@ export function primaryAbilityOf(gen: Gen, species: string): string | undefined 
  * computed stat equals the conversion module's (R5 / Validation U6.5). A
  * mismatch means a Champions stat-formula deviation — surfaced, not absorbed.
  */
-function buildMon(gen: Gen, spec: MonSpec, statKey: Exclude<StatKey, 'hp'>, sp: number): Pokemon {
+function buildMon(
+  gen: Gen,
+  spec: MonSpec,
+  statKey: Exclude<StatKey, 'hp'>,
+  sp: number,
+  extra?: { boosts?: Record<string, number> | undefined; status?: string | undefined },
+): Pokemon {
   const base = baseStat(gen, spec.species, statKey);
   const role = roleOf(spec.alignment, statKey);
   const mon = new Pokemon(gen, spec.species, {
@@ -127,6 +153,8 @@ function buildMon(gen: Gen, spec: MonSpec, statKey: Exclude<StatKey, 'hp'>, sp: 
     ivs: { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31 },
     ...(spec.item ? { item: spec.item } : {}),
     ...(spec.ability ? { ability: spec.ability } : {}),
+    ...(extra?.boosts ? { boosts: extra.boosts } : {}),
+    ...(extra?.status ? { status: extra.status as never } : {}),
   });
   const expected = spToFinal(base, sp, role);
   const got = mon.stats[statKey];
@@ -167,10 +195,27 @@ export function predictHit(
   const offensiveStat = OFFENSIVE[category];
   const defensiveStat = DEFENSIVE[category];
 
-  const attacker = buildMon(gen, input.attacker, offensiveStat, input.attackerSp);
-  const defender = buildMon(gen, input.defender, defensiveStat, input.defenderSp);
+  const hctx = input.context;
+  const attacker = buildMon(gen, input.attacker, offensiveStat, input.attackerSp, {
+    ...(hctx?.attackerBoosts ? { boosts: hctx.attackerBoosts } : {}),
+    ...(hctx?.attackerBurned ? { status: 'brn' } : {}),
+  });
+  const defender = buildMon(gen, input.defender, defensiveStat, input.defenderSp, {
+    ...(hctx?.defenderBoosts ? { boosts: hctx.defenderBoosts } : {}),
+  });
 
-  const damage = calculate(gen, attacker, defender, move).damage;
+  // Champions is always Doubles; the field is applied only for real (reconstructed)
+  // hits, so synthetic ground-truth hits without context keep the unmodified form.
+  const field = hctx
+    ? new Field({
+        gameType: 'Doubles',
+        ...(hctx.weather ? { weather: hctx.weather as never } : {}),
+        ...(hctx.terrain ? { terrain: hctx.terrain as never } : {}),
+        defenderSide: new Side({ isReflect: !!hctx.reflect, isLightScreen: !!hctx.lightScreen, isAuroraVeil: !!hctx.auroraVeil }),
+      })
+    : undefined;
+
+  const damage = (field ? calculate(gen, attacker, defender, move, field) : calculate(gen, attacker, defender, move)).damage;
   if (Array.isArray(damage) && Array.isArray(damage[0])) {
     // 2-D damage = multi-hit / parental-bond style. The HP delta is a sum of
     // sub-hits → inherently composite; not a single clean factor (Constraint §11).
