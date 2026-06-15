@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import { ReplayPlayer, toProtocol, type ReplayState, type SlotState } from '../replay';
+import { ReplayPlayer, showdownReplayHtml, toProtocol, type ReplayState, type SlotState } from '../replay';
 import { buildLog, type Workspace } from './model';
 
 const SLOTS = ['p1a', 'p1b', 'p2a', 'p2b'] as const;
 
 export function ReplayTab({ ws }: { ws: Workspace }) {
+  const [view, setView] = useState<'showdown' | 'board'>('showdown');
   const { messages, error } = useMemo(() => {
     try {
       return { messages: toProtocol(buildLog(ws)), error: undefined as string | undefined };
@@ -20,6 +21,22 @@ export function ReplayTab({ ws }: { ws: Workspace }) {
   if (error) return <div className="panel error">Replay error: {error}</div>;
   if (messages.length === 0) return <div className="panel">Add teams and events first.</div>;
 
+  const viewToggle = (
+    <div className="controls">
+      <button className={view === 'showdown' ? 'primary' : ''} onClick={() => setView('showdown')}>Showdown view</button>
+      <button className={view === 'board' ? 'primary' : ''} onClick={() => setView('board')}>Simple board</button>
+    </div>
+  );
+
+  if (view === 'showdown') {
+    return (
+      <div>
+        {viewToggle}
+        <ShowdownView ws={ws} />
+      </div>
+    );
+  }
+
   const current = messages[index];
   const turns = player.turnIndices();
   const toTurnIndex = (dir: 1 | -1) => {
@@ -29,6 +46,7 @@ export function ReplayTab({ ws }: { ws: Workspace }) {
 
   return (
     <div>
+      {viewToggle}
       <div className="controls">
         <button onClick={() => setIndex(-1)}>⏮ start</button>
         <button onClick={() => toTurnIndex(-1)}>◀ turn</button>
@@ -59,6 +77,44 @@ export function ReplayTab({ ws }: { ws: Workspace }) {
         value={index}
         onChange={(e) => setIndex(Number(e.target.value))}
         style={{ width: '100%', marginTop: 16 }}
+      />
+    </div>
+  );
+}
+
+function ShowdownView({ ws }: { ws: Workspace }) {
+  const html = useMemo(() => {
+    try {
+      return showdownReplayHtml(buildLog(ws));
+    } catch (e) {
+      return `<p style="font-family:sans-serif;color:#c33">Could not build replay: ${(e as Error).message}</p>`;
+    }
+  }, [ws]);
+
+  const download = () => {
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${ws.round || 'match'}-${ws.sideA.player}-vs-${ws.sideB.player}.html`.replace(/\s+/g, '_');
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div>
+      <p className="muted" style={{ fontSize: 12 }}>
+        Rendered by the official Pokémon Showdown replay engine (needs internet for sprites/animations). If it doesn’t load,
+        download the replay and open it, or upload it to Showdown.
+      </p>
+      <div className="controls">
+        <button onClick={download}>⬇ Download replay (.html)</button>
+      </div>
+      <iframe
+        title="Showdown replay"
+        srcDoc={html}
+        sandbox="allow-scripts allow-same-origin"
+        style={{ width: '100%', height: 560, border: '1px solid var(--border)', borderRadius: 8, background: '#fff' }}
       />
     </div>
   );
