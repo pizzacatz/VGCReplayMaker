@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { MatchEvent, MatchLog } from '../log';
 import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { broughtInfo, leadMonIds, leadSlots, megaFormeFromItem, moveCanFlinch, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
+import { broughtInfo, buildLog, entryEffectEvents, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveRecoilDrain, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -125,6 +125,34 @@ describe('protectionBlocking — derive blocked hits from Protect / Wide Guard',
   it('Feint bypasses protection', () => {
     const ws = protectWs([{ user: 'B0', move: 'Protect' }]);
     expect(protectionBlocking(ws, 'B0', 'Feint', 1)).toBeNull();
+  });
+});
+
+describe('deterministic resolver — auto-derive engine consequences', () => {
+  it('moveRecoilDrain reads recoil/drain from the dex', () => {
+    expect(moveRecoilDrain('Flare Blitz')).toEqual({ recoil: [33, 100] });
+    expect(moveRecoilDrain('Draining Kiss').drain).toEqual([3, 4]);
+    expect(moveRecoilDrain('Earthquake')).toEqual({});
+  });
+  it('megaFormeAbility returns the forme ability', () => {
+    expect(megaFormeAbility('Charizard-Mega-Y')).toBe('Drought');
+    expect(megaFormeAbility('Charizard-Mega-X')).toBe('Tough Claws');
+  });
+  it('entryEffectEvents: Intimidate drops every opposing active Attack; Drought sets Sun', () => {
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp'), entry('B', 1, 'Annihilape')], leads: ['B0', 'B1'] },
+      events: [],
+    };
+    const board = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const intim = entryEffectEvents(ws, 'A0', 'Intimidate', board, true).map((b, i) => b(i + 1, 1));
+    expect(intim).toHaveLength(2); // both foes
+    expect(intim.every((e) => e.type === 'stat_stage_change' && e.stat === 'atk' && e.stages === -1)).toBe(true);
+    expect(intim.map((e) => (e.type === 'stat_stage_change' ? e.target : '')).sort()).toEqual(['B0', 'B1']);
+
+    const sun = entryEffectEvents(ws, 'A0', 'Drought', board, false).map((b, i) => b(i + 1, 1));
+    expect(sun).toHaveLength(1);
+    expect(sun[0]).toMatchObject({ type: 'field_change', field: 'Sun', action: 'set' });
   });
 });
 

@@ -5,9 +5,13 @@ import {
   activeMonIds,
   benchMons,
   currentBoard,
+  entryEffectEvents,
+  megaFormeAbility,
   megaFormeFromItem,
+  monAbility,
   monLabel,
   moveCanFlinch,
+  moveRecoilDrain,
   nextEventId,
   planTargets,
   protectionBlocking,
@@ -92,6 +96,13 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     emit([(seq) => ({ eventId: nextEventId(), seq, turn: n, type: 'turn_start' })]);
   };
 
+  // Start of match: turn 1 + lead entry abilities (Intimidate, weather/terrain).
+  const startMatch = () => {
+    const builders: Array<(seq: number, turn: number) => MatchEvent> = [(seq) => ({ eventId: nextEventId(), seq, turn: 1, type: 'turn_start' })];
+    for (const m of activeMonIds(board)) builders.push(...entryEffectEvents(ws, m.monId, monAbility(ws, m.monId), board, true));
+    emit(builders);
+  };
+
   const pickActor = (monId: string) => {
     setActor(monId);
     setMode('move');
@@ -174,6 +185,27 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
           builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'flinch', outcome: 'yes' }));
         }
       }
+      // recoil / drain auto-derived from the total damage dealt (attacker adjusts HP if needed)
+      const totalDamage = targets.reduce((sum, t) => {
+        const o = outcomes[t] ?? blankOutcome();
+        if (o.missed) return sum;
+        const slot = slotOfMon(board, t);
+        const before = slot ? board.slots[slot]!.hp : 0;
+        const after = o.ko ? 0 : o.hpAfter === '' ? null : Number(o.hpAfter);
+        return after === null ? sum : sum + (before - after);
+      }, 0);
+      const rd = moveRecoilDrain(move);
+      const aSlot = slotOfMon(board, actor);
+      const aHp = aSlot ? board.slots[aSlot]!.hp : 0;
+      if (rd.recoil && totalDamage > 0) {
+        const amt = Math.floor((totalDamage * rd.recoil[0]) / rd.recoil[1]);
+        const after = Math.max(0, aHp - amt);
+        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'passive_hp_change', target: actor, source: 'Recoil', hpBefore: aHp, hpAfter: after }));
+      }
+      if (rd.drain && totalDamage > 0) {
+        const amt = Math.floor((totalDamage * rd.drain[0]) / rd.drain[1]);
+        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'heal', target: actor, source: 'Drain', hpBefore: aHp, hpAfter: aHp + amt }));
+      }
     }
     emit(builders);
     reset();
@@ -183,13 +215,21 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     const slot = slotOfMon(board, actor!);
     if (!slot || !actor) return;
     const { side, position } = slotPosition(slot);
-    emit([(seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'switch', side, position, out: actor, in: incoming })]);
+    const builders: Array<(seq: number, turn: number) => MatchEvent> = [
+      (seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'switch', side, position, out: actor, in: incoming }),
+    ];
+    builders.push(...entryEffectEvents(ws, incoming, monAbility(ws, incoming), board, true)); // Intimidate / weather on entry
+    emit(builders);
     reset();
   };
 
   const doMega = () => {
     if (!actor || !megaForme) return;
-    emit([(seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'mega_evolution', mon: actor, megaSpecies: megaForme })]);
+    const builders: Array<(seq: number, turn: number) => MatchEvent> = [
+      (seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'mega_evolution', mon: actor, megaSpecies: megaForme }),
+    ];
+    builders.push(...entryEffectEvents(ws, actor, megaFormeAbility(megaForme), board, false)); // e.g. Mega Char Y → Drought (no Intimidate)
+    emit(builders);
     reset();
   };
 
@@ -200,8 +240,12 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
 
         <div className="controls">
           <strong>Turn {currentTurn}</strong>
-          <button onClick={newTurn}>▶ New turn</button>
-          <span className="muted">Click the acting Pokémon, then its move.</span>
+          {ws.events.length === 0 ? (
+            <button className="primary" onClick={startMatch}>▶ Start match (applies lead abilities)</button>
+          ) : (
+            <button onClick={newTurn}>▶ New turn</button>
+          )}
+          <span className="muted">Click the acting Pokémon, then its move — recoil, Intimidate &amp; weather auto-fill.</span>
         </div>
 
         <Board actives={actives} actor={actor} onPick={pickActor} youName={ws.sideA.player} oppName={ws.sideB.player} />

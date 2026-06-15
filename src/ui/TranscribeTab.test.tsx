@@ -114,8 +114,8 @@ describe('TranscribeTab does not crash on interaction', () => {
     fireEvent.click(getByText('Flare Blitz'));
     fireEvent.click(getByText('KO')); // KO checkbox → HP auto 0
     fireEvent.click(getByText('Log action'));
-    // move_used + damage (→0) + faint = 3 events
-    expect(getByText('Event log (3)')).toBeTruthy();
+    // move_used + damage(→0) + faint + Flare Blitz recoil = 4 events
+    expect(getByText('Event log (4)')).toBeTruthy();
     expect(getAllByText(/fainted/).length).toBeGreaterThan(0); // faint event in the log
   });
 
@@ -130,6 +130,32 @@ describe('TranscribeTab does not crash on interaction', () => {
     fireEvent.change(getByLabelText('HP after'), { target: { value: '99' } });
     fireEvent.click(getByText('Save'));
     expect(getByText(/→99/)).toBeTruthy(); // event log reflects the edit
+  });
+
+  it('Flare Blitz auto-adds a recoil event', () => {
+    const { getAllByText, getByText, getByPlaceholderText } = render(<Harness />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Flare Blitz'));
+    fireEvent.change(getByPlaceholderText('hp after'), { target: { value: '100' } });
+    fireEvent.click(getByText('Log action'));
+    expect(getByText(/Recoil/)).toBeTruthy(); // recoil passive_hp_change auto-derived
+  });
+
+  it('Start match applies lead Intimidate', () => {
+    const inc = entry('A', 0, 'Incineroar');
+    inc.parsed.ability = 'Intimidate';
+    const ws: Workspace = {
+      sideA: { player: 'P1', rawPaste: '', mons: [inc], leads: ['A0'] },
+      sideB: { player: 'P2', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getByText } = render(<H />);
+    fireEvent.click(getByText(/Start match/));
+    expect(getByText(/atk -1/)).toBeTruthy(); // Intimidate dropped Garchomp's Attack
   });
 
   it('a Pokémon holding a mega stone shows a Mega Evolve button (no forme choice)', () => {

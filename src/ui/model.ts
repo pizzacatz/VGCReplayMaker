@@ -357,6 +357,69 @@ export function typeEffectiveness(move: string, defenderSpecies: string): Effect
   }
 }
 
+// ── Deterministic resolver: auto-derive the consequences the engine knows ────
+
+/** Game-universal ability → weather (constants, not Champions-specific). */
+const WEATHER_ABILITIES: Record<string, string> = {
+  Drought: 'Sun', 'Orichalcum Pulse': 'Sun', 'Desolate Land': 'Sun',
+  Drizzle: 'Rain', 'Primordial Sea': 'Rain',
+  'Sand Stream': 'Sand', 'Snow Warning': 'Snow',
+};
+const TERRAIN_ABILITIES: Record<string, string> = {
+  'Electric Surge': 'Electric Terrain', 'Hadron Engine': 'Electric Terrain',
+  'Grassy Surge': 'Grassy Terrain', 'Psychic Surge': 'Psychic Terrain', 'Misty Surge': 'Misty Terrain',
+};
+
+export type EventBuilder = (seq: number, turn: number) => MatchEvent;
+
+/** A mon's ability from its sheet. */
+export function monAbility(ws: Workspace, monId: string): string | undefined {
+  return allMons(ws).find((m) => m.monId === monId)?.parsed.ability;
+}
+
+/** The ability a mega forme gains (e.g. Charizard-Mega-Y → Drought). */
+export function megaFormeAbility(forme: string): string | undefined {
+  try {
+    const a = Dex.species.get(forme).abilities as unknown as Record<string, string>;
+    return a?.['0'];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Events the engine derives when a mon ENTERS the field (lead, switch-in, or mega):
+ * Intimidate drops every opposing active mon's Attack; weather/terrain-setting
+ * abilities set the field. `includeIntimidate` is false for mega (the mon was
+ * already on the field, so only the new ability's weather/terrain fires).
+ */
+export function entryEffectEvents(ws: Workspace, monId: string, ability: string | undefined, board: ReplayState, includeIntimidate: boolean): EventBuilder[] {
+  const out: EventBuilder[] = [];
+  if (!ability) return out;
+  if (includeIntimidate && ability === 'Intimidate') {
+    const side = rosterSideOf(ws, monId);
+    for (const foe of activeMonIds(board).filter((m) => m.side !== side && !m.fainted)) {
+      const target = foe.monId;
+      out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target, stat: 'atk', stages: -1, source: 'Intimidate' }));
+    }
+  }
+  const weather = WEATHER_ABILITIES[ability];
+  if (weather) out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'field_change', field: weather, action: 'set' }));
+  const terrain = TERRAIN_ABILITIES[ability];
+  if (terrain) out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'field_change', field: terrain, action: 'set' }));
+  return out;
+}
+
+/** Recoil/drain fractions of damage dealt for a move (from dex move data). */
+export function moveRecoilDrain(move: string): { recoil?: [number, number]; drain?: [number, number] } {
+  try {
+    const m = Dex.moves.get(move) as { recoil?: [number, number]; drain?: [number, number] };
+    return { ...(m.recoil ? { recoil: m.recoil } : {}), ...(m.drain ? { drain: m.drain } : {}) };
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Whether a move can cause flinch on THIS hit — only true for moves with a flinch
  * secondary, or any damaging move when the attacker holds King's Rock / Razor Fang
