@@ -27,6 +27,7 @@ export type Effect =
   | { kind: 'weather'; value: string | null }
   | { kind: 'field'; condition: string; action: 'set' | 'end' }
   | { kind: 'side'; side: Side; condition: string; action: 'set' | 'end' }
+  | { kind: 'formeChange'; slot: string; species: string }
   | { kind: 'noop' };
 
 export interface ProtocolMessage {
@@ -181,6 +182,11 @@ export function toProtocol(log: MatchLog): ProtocolMessage[] {
       case 'item_or_ability_event': {
         const slot = slotByMon.get(ev.mon);
         push(ev.seq, ev.turn, `|-${ev.kind}|${slot ?? ev.mon}|${ev.name}`, { kind: 'noop' });
+        return;
+      }
+      case 'mega_evolution': {
+        const slot = slotOf(ev.mon);
+        push(ev.seq, ev.turn, `|detailschange|${slot}|${ev.megaSpecies}`, { kind: 'formeChange', slot, species: ev.megaSpecies });
         return;
       }
       case 'random_outcome':

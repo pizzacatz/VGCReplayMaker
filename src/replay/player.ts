@@ -106,6 +106,11 @@ export function applyEffect(prev: ReplayState, effect: Effect): ReplayState {
       }
       return s;
     }
+    case 'formeChange': {
+      const slot = s.slots[effect.slot];
+      if (slot) s.slots[effect.slot] = { ...slot, species: effect.species };
+      return s;
+    }
     case 'noop':
       return s;
   }

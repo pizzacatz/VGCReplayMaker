@@ -4,11 +4,13 @@
  */
 
 import { toID } from '@smogon/calc';
+import { Dex } from '@pkmn/dex';
 import { championsGen, type MonSpec } from '../engine';
 import { ConstraintSystem, type SolveResult } from '../solver';
 import { parsePokepaste, type ParsedMon } from '../import';
 import { extractCleanHits, extractSpeedFacts } from '../integration';
-import type { MatchEvent, MatchLog, Position } from '../log';
+import { ReplayPlayer, toProtocol, type ReplayState } from '../replay';
+import type { MatchEvent, MatchLog, Position, Side } from '../log';
 
 export interface MonEntry {
   monId: string;
@@ -129,4 +131,97 @@ let seqCounter = 0;
 export function nextEventId(): string {
   seqCounter += 1;
   return `e${seqCounter}_${Math.floor(performance.now())}`;
+}
+
+// ── Board / smart-targeting helpers (for the click-first transcription flow) ──
+
+const SLOT_KEYS = ['p1a', 'p1b', 'p2a', 'p2b'] as const;
+
+/** The active board after all current events (HP/species reconstructed). Null if the log is invalid. */
+export function currentBoard(ws: Workspace): ReplayState | null {
+  try {
+    const player = new ReplayPlayer(toProtocol(buildLog(ws)));
+    return player.stateAt(player.length - 1);
+  } catch {
+    return null;
+  }
+}
+
+export function slotOfMon(board: ReplayState, monId: string): string | null {
+  for (const key of SLOT_KEYS) if (board.slots[key]?.monId === monId) return key;
+  return null;
+}
+
+const sideOfSlot = (slot: string): Side => (slot.startsWith('p1') ? 'A' : 'B');
+
+/** Active mon ids on a side. */
+export function activeMonIds(board: ReplayState): Array<{ slot: string; monId: string; species: string; hp: number; maxHp: number; side: Side; fainted: boolean }> {
+  const out: Array<{ slot: string; monId: string; species: string; hp: number; maxHp: number; side: Side; fainted: boolean }> = [];
+  for (const key of SLOT_KEYS) {
+    const s = board.slots[key];
+    if (s) out.push({ slot: key, monId: s.monId, species: s.species, hp: s.hp, maxHp: s.maxHp, side: sideOfSlot(key), fainted: s.fainted });
+  }
+  return out;
+}
+
+/** Bench (non-active, non-fainted) mons on a side — for switch-in choices. */
+export function benchMons(ws: Workspace, side: Side, board: ReplayState): MonEntry[] {
+  const activeIds = new Set(activeMonIds(board).map((m) => m.monId));
+  const faintedIds = new Set(activeMonIds(board).filter((m) => m.fainted).map((m) => m.monId));
+  const roster = side === 'A' ? ws.sideA.mons : ws.sideB.mons;
+  return roster.filter((m) => !activeIds.has(m.monId) && !faintedIds.has(m.monId));
+}
+
+export type TargetScope = 'foes' | 'ally' | 'self' | 'field';
+export interface TargetPlan {
+  scope: TargetScope;
+  spread: boolean;
+  /** candidate target mon ids, foes first (empty for field moves) */
+  candidates: string[];
+  isDamaging: boolean;
+}
+
+/** Resolve a move's legal targets from dex target data — foes first (the smart bit). */
+export function planTargets(move: string, actorMonId: string, board: ReplayState): TargetPlan {
+  // @pkmn/dex has full move targeting data (the calc omits `target` for status moves).
+  const data = Dex.moves.get(move);
+  const targetType = data.exists ? data.target : 'normal';
+  const isDamaging = data.category !== 'Status';
+
+  const actorSlot = slotOfMon(board, actorMonId);
+  const actorSide: Side = actorSlot ? sideOfSlot(actorSlot) : 'A';
+  const actives = activeMonIds(board).filter((m) => !m.fainted);
+  const foes = actives.filter((m) => m.side !== actorSide).map((m) => m.monId);
+  const ally = actives.filter((m) => m.side === actorSide && m.monId !== actorMonId).map((m) => m.monId);
+
+  switch (targetType) {
+    case 'self':
+      return { scope: 'self', spread: false, candidates: [actorMonId], isDamaging };
+    case 'adjacentAlly':
+      return { scope: 'ally', spread: false, candidates: ally, isDamaging };
+    case 'adjacentAllyOrSelf':
+      return { scope: 'ally', spread: false, candidates: [...ally, actorMonId], isDamaging };
+    case 'allAdjacentFoes':
+    case 'foeSide':
+      return { scope: 'foes', spread: true, candidates: foes, isDamaging };
+    case 'allAdjacent':
+      return { scope: 'foes', spread: true, candidates: [...foes, ...ally], isDamaging };
+    case 'allySide':
+    case 'allyTeam':
+    case 'all':
+      return { scope: 'field', spread: false, candidates: [], isDamaging };
+    default:
+      // normal / any / randomNormal / scripted → single, foes first then ally
+      return { scope: 'foes', spread: false, candidates: [...foes, ...ally], isDamaging };
+  }
+}
+
+/** Mega formes available for a species (dex-validated; no invented data). */
+export function megaFormesFor(species: string): string[] {
+  const gen = championsGen();
+  return [`${species}-Mega`, `${species}-Mega-X`, `${species}-Mega-Y`].filter((c) => gen.species.get(toID(c)));
+}
+
+export function slotPosition(slot: string): { side: Side; position: Position } {
+  return { side: sideOfSlot(slot), position: slot.endsWith('a') ? 0 : 1 };
 }

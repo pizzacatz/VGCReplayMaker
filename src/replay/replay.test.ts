@@ -125,6 +125,26 @@ describe('U5.7 — deterministic rebuild', () => {
   });
 });
 
+describe('Mega Evolution renders a forme change', () => {
+  const megaLog: MatchLog = {
+    matchId: 'mega', format: 'Champions Reg M-A',
+    sideA: { player: 'W', mons: [{ monId: 'cha', species: 'Charizard', maxHp: 153 }] },
+    sideB: { player: 'O', mons: [{ monId: 'gar', species: 'Garchomp', maxHp: 183 }] },
+    leads: [{ side: 'A', position: 0, monId: 'cha' }, { side: 'B', position: 0, monId: 'gar' }],
+    events: [
+      { eventId: 't', seq: 1, turn: 1, type: 'turn_start' },
+      { eventId: 'mega', seq: 2, turn: 1, type: 'mega_evolution', mon: 'cha', megaSpecies: 'Charizard-Mega-X' },
+    ],
+  };
+
+  it('emits |detailschange| and updates the slot species', () => {
+    const p = toProtocol(megaLog);
+    expect(p.some((m) => m.line.startsWith('|detailschange|') && m.line.includes('Charizard-Mega-X'))).toBe(true);
+    const end = new ReplayPlayer(p).stateAt(p.length - 1);
+    expect(end.slots['p1a']!.species).toBe('Charizard-Mega-X');
+  });
+});
+
 describe('state reconstruction', () => {
   it('tracks board, switches, statuses, field and side conditions', () => {
     const end = new ReplayPlayer(proto).stateAt(proto.length - 1);

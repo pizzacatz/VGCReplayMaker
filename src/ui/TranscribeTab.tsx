@@ -1,232 +1,275 @@
 import { useMemo, useState } from 'react';
 import type { MatchEvent } from '../log';
-import { ReplayPlayer, toProtocol } from '../replay';
-import { allMons, buildLog, monLabel, nextEventId, type Workspace } from './model';
+import type { ReplayState } from '../replay';
+import {
+  activeMonIds,
+  benchMons,
+  currentBoard,
+  megaFormesFor,
+  monLabel,
+  nextEventId,
+  planTargets,
+  slotOfMon,
+  slotPosition,
+  type Workspace,
+} from './model';
+import { AdvancedEvents } from './AdvancedEvents';
 
-type NewEvent = {
-  type: MatchEvent['type'];
-  user: string;
-  move: string;
-  attacker: string;
-  defender: string;
-  target: string;
-  hpBefore: number;
-  hpAfter: number;
-  crit: boolean;
-  status: 'clean' | 'composite' | 'unresolved';
-  effectiveness: string;
-  field: string;
-  action: 'set' | 'end';
-  side: 'A' | 'B';
-  statusName: string;
-  stat: string;
-  stages: number;
-  source: string;
-  position: 0 | 1;
-  isSpread: boolean;
-};
-
-const blank = (): NewEvent => ({
-  type: 'damage', user: '', move: '', attacker: '', defender: '', target: '', hpBefore: 0, hpAfter: 0,
-  crit: false, status: 'clean', effectiveness: '1x', field: 'Sun', action: 'set', side: 'A', statusName: 'brn',
-  stat: 'atk', stages: 1, source: '', position: 0, isSpread: false,
-});
-
-const EVENT_TYPES: Array<[MatchEvent['type'], string]> = [
-  ['turn_start', 'Turn start'],
-  ['move_used', 'Move used'],
-  ['damage', 'Damage'],
-  ['heal', 'Heal'],
-  ['passive_hp_change', 'Passive HP change'],
-  ['switch', 'Switch'],
-  ['faint', 'Faint'],
-  ['status_applied', 'Status applied'],
-  ['status_cured', 'Status cured'],
-  ['stat_stage_change', 'Stat stage change'],
-  ['field_change', 'Field change'],
-];
+type Mode = 'idle' | 'move' | 'switch' | 'mega';
 
 export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspace) => void }) {
-  const [f, setF] = useState<NewEvent>(blank);
-  const mons = allMons(ws);
-  const set = (patch: Partial<NewEvent>) => setF({ ...f, ...patch });
+  const board = useMemo(() => currentBoard(ws), [ws]);
+  const [actor, setActor] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>('idle');
+  const [move, setMove] = useState<string | null>(null);
+  const [targets, setTargets] = useState<string[]>([]);
+  const [hpAfter, setHpAfter] = useState<Record<string, string>>({});
+  const [crit, setCrit] = useState(false);
+  const [eff, setEff] = useState('1x');
+  const [status, setStatus] = useState<'clean' | 'composite' | 'unresolved'>('clean');
+  const [noDamage, setNoDamage] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const nextSeq = ws.events.length ? Math.max(...ws.events.map((e) => e.seq)) + 1 : 1;
   const currentTurn = useMemo(() => {
-    const turns = ws.events.filter((e) => e.type === 'turn_start');
-    return turns.length ? Math.max(...turns.map((e) => e.turn)) : 1;
+    const ts = ws.events.filter((e) => e.type === 'turn_start');
+    return ts.length ? Math.max(...ts.map((e) => e.turn)) : 1;
   }, [ws.events]);
 
-  // Reconstructed state the next event will see (Schema v2 §6.3 confirmation).
-  const reconstructed = useMemo(() => {
-    try {
-      const player = new ReplayPlayer(toProtocol(buildLog(ws)));
-      return player.stateAt(player.length - 1);
-    } catch {
-      return null;
-    }
-  }, [ws]);
+  if (ws.sideA.mons.length === 0 && ws.sideB.mons.length === 0) {
+    return <div className="panel">Add teams first (Teams tab).</div>;
+  }
+  if (!board) return <div className="panel error">The event log is inconsistent (a hit references an inactive mon). Remove the offending event.</div>;
 
-  const moveOptions = (monId: string): string[] => mons.find((m) => m.monId === monId)?.parsed.moves ?? [];
-
-  const addEvent = () => {
-    const base = { eventId: nextEventId(), seq: nextSeq, turn: f.type === 'turn_start' ? currentTurn + (ws.events.length ? 1 : 0) || 1 : currentTurn };
-    let ev: MatchEvent | null = null;
-    switch (f.type) {
-      case 'turn_start': ev = { ...base, turn: (ws.events.filter((e) => e.type === 'turn_start').length || 0) + 1, type: 'turn_start' }; break;
-      case 'move_used': if (f.user) ev = { ...base, type: 'move_used', user: f.user, move: f.move, targets: f.target ? [f.target] : [], isSpread: f.isSpread }; break;
-      case 'damage': if (f.attacker && f.defender) ev = { ...base, type: 'damage', attacker: f.attacker, move: f.move, defender: f.defender, hpBefore: f.hpBefore, hpAfter: f.hpAfter, crit: f.crit, status: f.status, observedEffectiveness: f.effectiveness }; break;
-      case 'heal': if (f.target) ev = { ...base, type: 'heal', target: f.target, source: f.source, hpBefore: f.hpBefore, hpAfter: f.hpAfter }; break;
-      case 'passive_hp_change': if (f.target) ev = { ...base, type: 'passive_hp_change', target: f.target, source: f.source, hpBefore: f.hpBefore, hpAfter: f.hpAfter }; break;
-      case 'switch': if (f.target) ev = { ...base, type: 'switch', side: f.side, position: f.position, in: f.target }; break;
-      case 'faint': if (f.target) ev = { ...base, type: 'faint', target: f.target }; break;
-      case 'status_applied': if (f.target) ev = { ...base, type: 'status_applied', target: f.target, status: f.statusName }; break;
-      case 'status_cured': if (f.target) ev = { ...base, type: 'status_cured', target: f.target, status: f.statusName }; break;
-      case 'stat_stage_change': if (f.target) ev = { ...base, type: 'stat_stage_change', target: f.target, stat: f.stat, stages: f.stages, source: f.source }; break;
-      case 'field_change': ev = { ...base, type: 'field_change', field: f.field, action: f.action, ...(f.side ? { side: f.side } : {}) }; break;
-      default: break;
-    }
-    if (ev) setWs({ ...ws, events: [...ws.events, ev] });
+  const monMoves = (monId: string): string[] => [...ws.sideA.mons, ...ws.sideB.mons].find((m) => m.monId === monId)?.parsed.moves ?? [];
+  const actives = activeMonIds(board);
+  const reset = () => {
+    setActor(null);
+    setMode('idle');
+    setMove(null);
+    setTargets([]);
+    setHpAfter({});
+    setCrit(false);
+    setEff('1x');
+    setStatus('clean');
+    setNoDamage(false);
   };
 
-  const remove = (eventId: string) => setWs({ ...ws, events: ws.events.filter((e) => e.eventId !== eventId) });
+  const emit = (builders: Array<(seq: number, turn: number) => MatchEvent>) => {
+    let seq = ws.events.length ? Math.max(...ws.events.map((e) => e.seq)) : 0;
+    const evs = builders.map((b) => {
+      seq += 1;
+      return b(seq, currentTurn);
+    });
+    setWs({ ...ws, events: [...ws.events, ...evs] });
+  };
 
-  const monSelect = (value: string, onChange: (v: string) => void) => (
-    <select value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">— mon —</option>
-      {mons.map((m) => (
-        <option key={m.monId} value={m.monId}>
-          {m.side}: {m.parsed.species}
-        </option>
-      ))}
-    </select>
-  );
+  const newTurn = () => {
+    const n = ws.events.filter((e) => e.type === 'turn_start').length + 1;
+    emit([(seq) => ({ eventId: nextEventId(), seq, turn: n, type: 'turn_start' })]);
+  };
 
-  if (mons.length === 0) return <div className="panel">Add teams first (Teams tab).</div>;
+  const pickActor = (monId: string) => {
+    setActor(monId);
+    setMode('move');
+    setMove(null);
+    setTargets([]);
+    setHpAfter({});
+  };
+
+  const pickMove = (m: string) => {
+    setMove(m);
+    const plan = planTargets(m, actor!, board);
+    setTargets(plan.spread ? plan.candidates : plan.candidates.slice(0, 1));
+    setHpAfter({});
+    setNoDamage(!plan.isDamaging);
+  };
+
+  const plan = move && actor ? planTargets(move, actor, board) : null;
+
+  const confirmMove = () => {
+    if (!actor || !move) return;
+    const builders: Array<(seq: number, turn: number) => MatchEvent> = [
+      (seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'move_used', user: actor, move, targets, isSpread: plan?.spread ?? false }),
+    ];
+    if (!noDamage && plan?.isDamaging) {
+      for (const t of targets) {
+        const slot = slotOfMon(board, t);
+        const before = slot ? board.slots[slot]!.hp : 0;
+        const afterRaw = hpAfter[t];
+        if (afterRaw === undefined || afterRaw === '') continue;
+        const after = Number(afterRaw);
+        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit, status, observedEffectiveness: eff }));
+      }
+    }
+    emit(builders);
+    reset();
+  };
+
+  const doSwitch = (incoming: string) => {
+    const slot = slotOfMon(board, actor!);
+    if (!slot) return;
+    const { side, position } = slotPosition(slot);
+    emit([(seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'switch', side, position, in: incoming })]);
+    reset();
+  };
+
+  const doMega = (forme: string) => {
+    emit([(seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'mega_evolution', mon: actor!, megaSpecies: forme })]);
+    reset();
+  };
+
+  const actorSpecies = actor ? actives.find((a) => a.monId === actor)?.species : undefined;
+  const megaFormes = actorSpecies ? megaFormesFor(actorSpecies.replace(/-Mega.*$/, '')) : [];
 
   return (
     <div className="row">
       <div className="col panel">
-        <h2>Add event · seq {nextSeq} · turn {currentTurn}</h2>
-        <div className="field">
-          <label>Type</label>
-          <select value={f.type} onChange={(e) => set({ type: e.target.value as MatchEvent['type'] })}>
-            {EVENT_TYPES.map(([id, label]) => (
-              <option key={id} value={id}>{label}</option>
-            ))}
-          </select>
+        <div className="controls">
+          <strong>Turn {currentTurn}</strong>
+          <button onClick={newTurn}>▶ New turn</button>
+          <span className="muted">Click the acting Pokémon, then its move.</span>
         </div>
 
-        {f.type === 'move_used' && (
-          <>
-            <div className="field"><label>User</label>{monSelect(f.user, (v) => set({ user: v, move: moveOptions(v)[0] ?? '' }))}</div>
-            <div className="field"><label>Move</label>
-              <select value={f.move} onChange={(e) => set({ move: e.target.value })}>
-                {moveOptions(f.user).map((m) => <option key={m}>{m}</option>)}
-              </select>
+        {/* Board — click to choose the actor */}
+        <Board actives={actives} actor={actor} onPick={pickActor} />
+
+        {/* Action panel */}
+        {actor && (
+          <div className="panel" style={{ marginTop: 12, background: 'var(--panel2)' }}>
+            <div className="controls" style={{ marginTop: 0 }}>
+              <strong>{monLabel(ws, actor)}</strong>
+              <button onClick={reset}>cancel</button>
             </div>
-            <div className="field"><label>Target</label>{monSelect(f.target, (v) => set({ target: v }))}</div>
-            <div className="field"><label>Spread move</label><input type="checkbox" checked={f.isSpread} onChange={(e) => set({ isSpread: e.target.checked })} /></div>
-          </>
+
+            {mode === 'move' && !move && (
+              <>
+                <div className="grid">
+                  {monMoves(actor).map((m) => (
+                    <button key={m} onClick={() => pickMove(m)}>{m}</button>
+                  ))}
+                </div>
+                <div className="controls">
+                  <button onClick={() => setMode('switch')}>Switch out ↔</button>
+                  {megaFormes.length > 0 && <button onClick={() => setMode('mega')}>Mega Evolve ✦</button>}
+                </div>
+              </>
+            )}
+
+            {mode === 'move' && move && plan && (
+              <div>
+                <div className="controls" style={{ marginTop: 0 }}>
+                  <strong>{move}</strong>
+                  <span className="muted">{plan.spread ? 'spread' : plan.scope} · {plan.isDamaging ? 'damaging' : 'status'}</span>
+                  <button onClick={() => { setMove(null); setTargets([]); }}>change move</button>
+                </div>
+
+                {plan.scope !== 'field' && (
+                  <>
+                    <div className="muted" style={{ fontSize: 12 }}>Targets (foes first){plan.spread ? ' — spread, all selected' : ''}:</div>
+                    <div className="chips">
+                      {plan.candidates.map((t) => {
+                        const on = targets.includes(t);
+                        return (
+                          <button
+                            key={t}
+                            className={on ? 'primary' : ''}
+                            onClick={() => {
+                              if (plan.spread) return;
+                              setTargets(on ? targets.filter((x) => x !== t) : [...targets, t]);
+                            }}
+                          >
+                            {monLabel(ws, t)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+
+                {!noDamage && plan.isDamaging && targets.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    {targets.map((t) => {
+                      const slot = slotOfMon(board, t);
+                      const before = slot ? board.slots[slot]!.hp : 0;
+                      return (
+                        <div className="field" key={t}>
+                          <label>{monLabel(ws, t)} HP</label>
+                          <span className="muted">{before} →</span>
+                          <input
+                            type="number"
+                            autoFocus
+                            placeholder="hp after"
+                            value={hpAfter[t] ?? ''}
+                            onChange={(e) => setHpAfter({ ...hpAfter, [t]: e.target.value })}
+                          />
+                          <span className="muted">{hpAfter[t] !== undefined && hpAfter[t] !== '' ? `= ${before - Number(hpAfter[t])} dmg` : ''}</span>
+                        </div>
+                      );
+                    })}
+                    <div className="controls" style={{ flexWrap: 'wrap' }}>
+                      <label className="chip"><input type="checkbox" checked={crit} onChange={(e) => setCrit(e.target.checked)} /> crit</label>
+                      <select value={eff} onChange={(e) => setEff(e.target.value)}>
+                        {['0.25x', '0.5x', '1x', '2x', '4x'].map((x) => <option key={x}>{x}</option>)}
+                      </select>
+                      <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
+                        <option value="clean">clean</option>
+                        <option value="composite">composite</option>
+                        <option value="unresolved">unresolved</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                <label className="chip" style={{ marginTop: 6, display: 'inline-block' }}>
+                  <input type="checkbox" checked={noDamage} onChange={(e) => setNoDamage(e.target.checked)} /> no damage (status / missed)
+                </label>
+
+                <ReconstructedPanel ws={ws} attacker={actor} state={board} />
+
+                <div style={{ marginTop: 8 }}>
+                  <button className="primary" onClick={confirmMove}>Log action</button>
+                </div>
+              </div>
+            )}
+
+            {mode === 'switch' && (
+              <div>
+                <div className="muted" style={{ fontSize: 12 }}>Bring in:</div>
+                <div className="chips">
+                  {benchMons(ws, slotPosition(slotOfMon(board, actor)!).side, board).map((m) => (
+                    <button key={m.monId} onClick={() => doSwitch(m.monId)}>{m.parsed.species}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {mode === 'mega' && (
+              <div>
+                <div className="muted" style={{ fontSize: 12 }}>Mega forme:</div>
+                <div className="chips">
+                  {megaFormes.map((f) => (
+                    <button key={f} onClick={() => doMega(f)}>{f}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
-        {f.type === 'damage' && (
-          <>
-            <div className="field"><label>Attacker</label>{monSelect(f.attacker, (v) => set({ attacker: v, move: moveOptions(v)[0] ?? '' }))}</div>
-            <div className="field"><label>Move</label>
-              <select value={f.move} onChange={(e) => set({ move: e.target.value })}>
-                {moveOptions(f.attacker).map((m) => <option key={m}>{m}</option>)}
-              </select>
-            </div>
-            <div className="field"><label>Defender</label>{monSelect(f.defender, (v) => set({ defender: v }))}</div>
-            <div className="field"><label>HP before → after</label>
-              <input type="number" value={f.hpBefore} onChange={(e) => set({ hpBefore: Number(e.target.value) })} />
-              <input type="number" value={f.hpAfter} onChange={(e) => set({ hpAfter: Number(e.target.value) })} />
-              <span className="muted">= {f.hpBefore - f.hpAfter} dmg</span>
-            </div>
-            <div className="field"><label>Crit</label><input type="checkbox" checked={f.crit} onChange={(e) => set({ crit: e.target.checked })} /></div>
-            <div className="field"><label>Effectiveness</label>
-              <select value={f.effectiveness} onChange={(e) => set({ effectiveness: e.target.value })}>
-                {['0.25x', '0.5x', '1x', '2x', '4x'].map((x) => <option key={x}>{x}</option>)}
-              </select>
-            </div>
-            <div className="field"><label>Source certainty</label>
-              <select value={f.status} onChange={(e) => set({ status: e.target.value as NewEvent['status'] })}>
-                <option value="clean">clean (one known attacker → solver-usable)</option>
-                <option value="composite">composite (combined sources → ignored by solver)</option>
-                <option value="unresolved">unresolved (reclassify later)</option>
-              </select>
-            </div>
-            <ReconstructedPanel ws={ws} attacker={f.attacker} defender={f.defender} state={reconstructed} />
-          </>
-        )}
-
-        {(f.type === 'heal' || f.type === 'passive_hp_change') && (
-          <>
-            <div className="field"><label>Target</label>{monSelect(f.target, (v) => set({ target: v }))}</div>
-            <div className="field"><label>Source</label><input value={f.source} onChange={(e) => set({ source: e.target.value })} placeholder="e.g. Grassy Terrain" /></div>
-            <div className="field"><label>HP before → after</label>
-              <input type="number" value={f.hpBefore} onChange={(e) => set({ hpBefore: Number(e.target.value) })} />
-              <input type="number" value={f.hpAfter} onChange={(e) => set({ hpAfter: Number(e.target.value) })} />
-            </div>
-          </>
-        )}
-
-        {f.type === 'switch' && (
-          <>
-            <div className="field"><label>Side / position</label>
-              <select value={f.side} onChange={(e) => set({ side: e.target.value as 'A' | 'B' })}><option>A</option><option>B</option></select>
-              <select value={f.position} onChange={(e) => set({ position: Number(e.target.value) as 0 | 1 })}><option value={0}>left</option><option value={1}>right</option></select>
-            </div>
-            <div className="field"><label>Switch in</label>{monSelect(f.target, (v) => set({ target: v }))}</div>
-          </>
-        )}
-
-        {f.type === 'faint' && <div className="field"><label>Target</label>{monSelect(f.target, (v) => set({ target: v }))}</div>}
-
-        {(f.type === 'status_applied' || f.type === 'status_cured') && (
-          <>
-            <div className="field"><label>Target</label>{monSelect(f.target, (v) => set({ target: v }))}</div>
-            <div className="field"><label>Status</label>
-              <select value={f.statusName} onChange={(e) => set({ statusName: e.target.value })}>
-                {['brn', 'par', 'psn', 'tox', 'slp', 'frz'].map((s) => <option key={s}>{s}</option>)}
-              </select>
-            </div>
-          </>
-        )}
-
-        {f.type === 'stat_stage_change' && (
-          <>
-            <div className="field"><label>Target</label>{monSelect(f.target, (v) => set({ target: v }))}</div>
-            <div className="field"><label>Stat</label>
-              <select value={f.stat} onChange={(e) => set({ stat: e.target.value })}>
-                {['atk', 'def', 'spa', 'spd', 'spe', 'accuracy', 'evasion'].map((s) => <option key={s}>{s}</option>)}
-              </select>
-            </div>
-            <div className="field"><label>Stages</label><input type="number" value={f.stages} onChange={(e) => set({ stages: Number(e.target.value) })} /></div>
-            <div className="field"><label>Source</label><input value={f.source} onChange={(e) => set({ source: e.target.value })} placeholder="e.g. Swords Dance" /></div>
-          </>
-        )}
-
-        {f.type === 'field_change' && (
-          <>
-            <div className="field"><label>Field</label><input value={f.field} onChange={(e) => set({ field: e.target.value })} placeholder="Sun / Grassy Terrain / Light Screen / Trick Room / Tailwind" /></div>
-            <div className="field"><label>Action</label><select value={f.action} onChange={(e) => set({ action: e.target.value as 'set' | 'end' })}><option>set</option><option>end</option></select></div>
-            <div className="field"><label>Side (screens/Tailwind)</label><select value={f.side} onChange={(e) => set({ side: e.target.value as 'A' | 'B' })}><option value="">— field-wide —</option><option>A</option><option>B</option></select></div>
-          </>
-        )}
-
-        <button className="primary" onClick={addEvent} style={{ marginTop: 10 }}>Add event</button>
+        <div style={{ marginTop: 12 }}>
+          <button onClick={() => setShowAdvanced(!showAdvanced)}>{showAdvanced ? '▾' : '▸'} Other events (status, field, heal, faint…)</button>
+          {showAdvanced && <AdvancedEvents ws={ws} setWs={setWs} currentTurn={currentTurn} />}
+        </div>
       </div>
 
       <div className="col panel">
         <h2>Event log ({ws.events.length})</h2>
-        {ws.events.length === 0 && <p className="muted">No events yet.</p>}
+        {ws.events.length === 0 && <p className="muted">No events yet. Click a Pokémon above to start.</p>}
         {[...ws.events].sort((a, b) => a.seq - b.seq).map((e) => (
           <div key={e.eventId} className="event">
             <span className="seq">{e.seq}</span>
             <span>{describe(e, (id) => monLabel(ws, id))}</span>
-            <span className="x" onClick={() => remove(e.eventId)}>✕</span>
+            <span className="x" onClick={() => setWs({ ...ws, events: ws.events.filter((x) => x.eventId !== e.eventId) })}>✕</span>
           </div>
         ))}
       </div>
@@ -234,30 +277,44 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   );
 }
 
-function ReconstructedPanel({
-  ws,
-  attacker,
-  defender,
-  state,
-}: {
-  ws: Workspace;
-  attacker: string;
-  defender: string;
-  state: ReturnType<ReplayPlayer['stateAt']> | null;
-}) {
-  if (!state) return null;
+function Board({ actives, actor, onPick }: { actives: ReturnType<typeof activeMonIds>; actor: string | null; onPick: (id: string) => void }) {
+  const foes = actives.filter((m) => m.side === 'B');
+  const you = actives.filter((m) => m.side === 'A');
+  const card = (m: ReturnType<typeof activeMonIds>[number]) => (
+    <button
+      key={m.monId}
+      className="slot"
+      style={{ textAlign: 'left', borderColor: actor === m.monId ? 'var(--accent)' : undefined, opacity: m.fainted ? 0.4 : 1 }}
+      disabled={m.fainted}
+      onClick={() => onPick(m.monId)}
+    >
+      <strong>{m.species}</strong>
+      <div className="muted" style={{ fontSize: 12 }}>{m.hp}/{m.maxHp} HP{m.fainted ? ' · fainted' : ''}</div>
+    </button>
+  );
+  return (
+    <>
+      <div className="muted" style={{ fontSize: 12 }}>Opponent</div>
+      <div className="board">{foes.length ? foes.map(card) : <span className="muted">no active mon</span>}</div>
+      <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>You</div>
+      <div className="board">{you.length ? you.map(card) : <span className="muted">no active mon</span>}</div>
+    </>
+  );
+}
+
+function ReconstructedPanel({ ws, attacker, state }: { ws: Workspace; attacker: string; state: ReplayState }) {
   const chips: string[] = [];
   if (state.weather) chips.push(`weather: ${state.weather}`);
   for (const c of state.field) chips.push(c);
-  const atkBoosts = state.boosts[attacker];
-  if (atkBoosts) for (const [s, n] of Object.entries(atkBoosts)) if (n) chips.push(`attacker ${s} ${n > 0 ? '+' : ''}${n}`);
-  const defSide = ws.sideA.mons.some((m) => m.monId === defender) ? 'A' : 'B';
-  for (const c of state.sides[defSide]) chips.push(`def side: ${c}`);
-  if (state.status[attacker]) chips.push(`attacker ${state.status[attacker]}`);
+  const ab = state.boosts[attacker];
+  if (ab) for (const [s, n] of Object.entries(ab)) if (n) chips.push(`atk ${s} ${n > 0 ? '+' : ''}${n}`);
+  if (state.status[attacker]) chips.push(`atk ${state.status[attacker]}`);
+  void ws;
+  if (chips.length === 0) return null;
   return (
-    <div className="panel" style={{ marginTop: 8, background: 'var(--panel2)' }}>
-      <div className="muted" style={{ fontSize: 12 }}>Reconstructed context the engine will apply (confirm vs. video):</div>
-      <div className="chips">{chips.length ? chips.map((c, i) => <span key={i} className="chip">{c}</span>) : <span className="chip">no active modifiers</span>}</div>
+    <div style={{ marginTop: 8 }}>
+      <div className="muted" style={{ fontSize: 11 }}>Engine will apply (confirm vs. video):</div>
+      <div className="chips">{chips.map((c, i) => <span key={i} className="chip">{c}</span>)}</div>
     </div>
   );
 }
@@ -273,9 +330,10 @@ function describe(e: MatchEvent, label: (id: string) => string): string {
     case 'faint': return `${label(e.target)} fainted`;
     case 'status_applied': return `${label(e.target)} → ${e.status}`;
     case 'status_cured': return `${label(e.target)} cured ${e.status}`;
-    case 'stat_stage_change': return `${label(e.target)} ${e.stat} ${e.stages > 0 ? '+' : ''}${e.stages} (${e.source ?? ''})`;
+    case 'stat_stage_change': return `${label(e.target)} ${e.stat} ${e.stages > 0 ? '+' : ''}${e.stages}`;
     case 'field_change': return `${e.field} ${e.action}${e.side ? ` [${e.side}]` : ''}`;
     case 'item_or_ability_event': return `${label(e.mon)} ${e.kind} ${e.name}`;
+    case 'mega_evolution': return `${label(e.mon)} Mega → ${e.megaSpecies}`;
     case 'random_outcome': return `${label(e.mon)} ${e.eventKind}: ${e.outcome}`;
   }
 }

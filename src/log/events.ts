@@ -109,6 +109,18 @@ export interface ItemOrAbilityEvent extends BaseEvent {
   effect?: string;
 }
 
+/**
+ * Mega Evolution (Champions Reg M-A). The mon's active species becomes its mega
+ * forme — changing base stats, ability, and typing for the rest of the battle.
+ * Replay shows the forme; SOLVER handling of post-mega base stats is a follow-up
+ * (the damage factor must use the mega species for hits after this event).
+ */
+export interface MegaEvolutionEvent extends BaseEvent {
+  type: 'mega_evolution';
+  mon: string;
+  megaSpecies: string;
+}
+
 export interface RandomOutcomeEvent extends BaseEvent {
   type: 'random_outcome';
   mon: string;
@@ -130,6 +142,7 @@ export type MatchEvent =
   | StatStageChangeEvent
   | FieldChangeEvent
   | ItemOrAbilityEvent
+  | MegaEvolutionEvent
   | RandomOutcomeEvent;
 
 /** Minimal mon sheet info replay needs (the full sheet lives in the roster/TeamInstance). */
