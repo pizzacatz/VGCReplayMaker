@@ -76,6 +76,24 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText('Clear all events')).toBeTruthy(); // graceful recovery panel, not a thrown crash
   });
 
+  it('the recovery screen pinpoints the bad event, keeps the log editable, and a targeted delete restores the board', () => {
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [entry('A', 0, 'Incineroar'), entry('A', 1, 'Zapdos'), entry('A', 2, 'Giratina')], leads: ['A1', 'A2'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      // A0 is not a lead → this move references an inactive mon (the culprit).
+      events: [{ eventId: 'bad', seq: 1, turn: 1, type: 'move_used', user: 'A0', move: 'Flare Blitz', targets: ['B0'] }],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getByText, queryByText } = render(<H />);
+    expect(getByText('Event log (1)')).toBeTruthy(); // log stays visible/editable (no soft-lock)
+    fireEvent.click(getByText(/Delete the offending event/)); // targeted, non-destructive fix
+    expect(queryByText(/be reconstructed/)).toBeNull(); // error cleared
+    expect(getByText('Match setup')).toBeTruthy(); // board/action UI is back
+  });
+
   it('spread move: per-target HP/crit/flinch, two damage events; self move logs once', () => {
     const ws: Workspace = {
       sideA: { player: 'You', rawPaste: '', mons: [entry('A', 0, 'Tyranitar', ['Rock Slide', 'Dragon Dance']), entry('A', 1, 'Zapdos')], leads: ['A0', 'A1'] },

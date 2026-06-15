@@ -4,7 +4,7 @@ import type { ReplayState } from '../replay';
 import {
   activeMonIds,
   benchMons,
-  currentBoard,
+  diagnoseLog,
   endOfTurnEvents,
   entryEffectEvents,
   estimateDamage,
@@ -45,14 +45,14 @@ interface TargetOutcome {
 const blankOutcome = (): TargetOutcome => ({ hpAfter: '', crit: false, flinch: false, missed: false, ko: false, status: 'clean' });
 
 export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspace) => void }) {
-  const board = useMemo(() => currentBoard(ws), [ws]);
+  const diagnosis = useMemo(() => diagnoseLog(ws), [ws]);
+  const board = diagnosis.board;
   const [actor, setActor] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>('idle');
   const [move, setMove] = useState<string | null>(null);
   const [targets, setTargets] = useState<string[]>([]);
   const [outcomes, setOutcomes] = useState<Record<string, TargetOutcome>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [editId, setEditId] = useState<string | null>(null);
 
   const currentTurn = useMemo(() => {
     const ts = ws.events.filter((e) => e.type === 'turn_start');
@@ -63,13 +63,36 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     return <div className="panel">Add teams first (Teams tab).</div>;
   }
   if (!board) {
+    const badEvent = diagnosis.badEventId ? ws.events.find((e) => e.eventId === diagnosis.badEventId) : undefined;
+    const deleteBad = () => setWs({ ...ws, events: ws.events.filter((e) => e.eventId !== diagnosis.badEventId) });
     return (
-      <div className="panel error">
-        <p>The event log is inconsistent (a move/hit references an inactive mon, or the leads changed under existing events).</p>
-        <div className="controls">
-          <button onClick={() => setWs({ ...ws, events: ws.events.slice(0, -1) })}>Undo last event</button>
-          <button onClick={() => setWs({ ...ws, events: [] })}>Clear all events</button>
+      <div className="row">
+        <div className="col panel">
+          <div className="panel error" style={{ marginBottom: 12 }}>
+            <strong>The event log can’t be reconstructed.</strong>
+            <p style={{ margin: '6px 0' }}>{diagnosis.message ?? 'A move or hit references a Pokémon that isn’t on the field.'}</p>
+            {badEvent && (
+              <p style={{ margin: '6px 0' }}>
+                Offending event <span className="seq">{badEvent.seq}</span>:{' '}
+                <strong>{describe(badEvent, (id) => monLabel(ws, id))}</strong> — it’s highlighted in the log.
+              </p>
+            )}
+            <div className="controls">
+              {diagnosis.badEventId && (
+                <button className="primary" onClick={deleteBad} style={{ color: 'var(--bad)' }}>✕ Delete the offending event</button>
+              )}
+              <button onClick={() => setWs({ ...ws, events: ws.events.slice(0, -1) })}>Undo last event</button>
+              <button onClick={() => setWs({ ...ws, events: [] })}>Clear all events</button>
+            </div>
+            <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>
+              {diagnosis.setupProblem
+                ? 'Fix the leads below so they match the roster — then the board returns.'
+                : 'Or fix the leads below, or edit/delete any event in the log on the right. The board returns as soon as the log is consistent.'}
+            </p>
+          </div>
+          <MatchSetup ws={ws} setWs={setWs} startOpen />
         </div>
+        <EventLogColumn ws={ws} setWs={setWs} {...(diagnosis.badEventId ? { highlightId: diagnosis.badEventId } : {})} />
       </div>
     );
   }
@@ -156,16 +179,6 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   // effectiveness derived from the dex (move type vs the target's current types)
   const effOf = (targetMonId: string): ReturnType<typeof typeEffectiveness> =>
     move ? typeEffectiveness(move, actives.find((a) => a.monId === targetMonId)?.species ?? '') : null;
-
-  const reorderEvents = (fromId: string, toId: string) => {
-    const sorted = [...ws.events].sort((a, b) => a.seq - b.seq);
-    const from = sorted.findIndex((e) => e.eventId === fromId);
-    const to = sorted.findIndex((e) => e.eventId === toId);
-    if (from < 0 || to < 0 || from === to) return;
-    const [moved] = sorted.splice(from, 1);
-    sorted.splice(to, 0, moved!);
-    setWs({ ...ws, events: sorted.map((e, i) => ({ ...e, seq: i + 1 })) });
-  };
 
   const actorFainted = actor ? !!actives.find((a) => a.monId === actor)?.fainted : false;
   const actorEntry = actor ? entryOf(actor) : undefined;
@@ -448,44 +461,62 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         </div>
       </div>
 
-      <div className="col panel">
-        <h2>Event log ({ws.events.length})</h2>
-        {ws.events.length === 0 && <p className="muted">No events yet. Set your leads above, then click a Pokémon to start.</p>}
-        {ws.events.length > 0 && <p className="muted" style={{ fontSize: 11 }}>drag ⠿ to reorder · click ✎ to edit</p>}
-        {[...ws.events].sort((a, b) => a.seq - b.seq).map((e) =>
-          editId === e.eventId ? (
-            <EventEditor
-              key={e.eventId}
-              ws={ws}
-              event={e}
-              onCancel={() => setEditId(null)}
-              onSave={(updated) => {
-                setWs({ ...ws, events: ws.events.map((x) => (x.eventId === updated.eventId ? updated : x)) });
-                setEditId(null);
-              }}
-            />
-          ) : (
-            <div
-              key={e.eventId}
-              className="event"
-              draggable
-              onDragStart={(ev) => ev.dataTransfer.setData('text/plain', e.eventId)}
-              onDragOver={(ev) => ev.preventDefault()}
-              onDrop={(ev) => {
-                ev.preventDefault();
-                const fromId = ev.dataTransfer.getData('text/plain');
-                if (fromId) reorderEvents(fromId, e.eventId);
-              }}
-            >
-              <span className="drag" title="drag to reorder" style={{ cursor: 'grab', color: 'var(--muted)' }}>⠿</span>
-              <span className="seq">{e.seq}</span>
-              <span>{describe(e, (id) => monLabel(ws, id))}</span>
-              <span className="x" title="edit" style={{ marginLeft: 'auto', color: 'var(--accent)', cursor: 'pointer' }} onClick={() => setEditId(e.eventId)}>✎</span>
-              <span className="x" title="delete" onClick={() => setWs({ ...ws, events: ws.events.filter((x) => x.eventId !== e.eventId) })}>✕</span>
-            </div>
-          ),
-        )}
-      </div>
+      <EventLogColumn ws={ws} setWs={setWs} />
+    </div>
+  );
+}
+
+/** The event log (drag-reorder + inline edit + delete). Reused in the recovery screen. */
+function EventLogColumn({ ws, setWs, highlightId }: { ws: Workspace; setWs: (w: Workspace) => void; highlightId?: string }) {
+  const [editId, setEditId] = useState<string | null>(null);
+  const reorderEvents = (fromId: string, toId: string) => {
+    const sorted = [...ws.events].sort((a, b) => a.seq - b.seq);
+    const from = sorted.findIndex((e) => e.eventId === fromId);
+    const to = sorted.findIndex((e) => e.eventId === toId);
+    if (from < 0 || to < 0 || from === to) return;
+    const [moved] = sorted.splice(from, 1);
+    sorted.splice(to, 0, moved!);
+    setWs({ ...ws, events: sorted.map((e, i) => ({ ...e, seq: i + 1 })) });
+  };
+  return (
+    <div className="col panel">
+      <h2>Event log ({ws.events.length})</h2>
+      {ws.events.length === 0 && <p className="muted">No events yet. Set your leads above, then click a Pokémon to start.</p>}
+      {ws.events.length > 0 && <p className="muted" style={{ fontSize: 11 }}>drag ⠿ to reorder · click ✎ to edit</p>}
+      {[...ws.events].sort((a, b) => a.seq - b.seq).map((e) =>
+        editId === e.eventId ? (
+          <EventEditor
+            key={e.eventId}
+            ws={ws}
+            event={e}
+            onCancel={() => setEditId(null)}
+            onSave={(updated) => {
+              setWs({ ...ws, events: ws.events.map((x) => (x.eventId === updated.eventId ? updated : x)) });
+              setEditId(null);
+            }}
+          />
+        ) : (
+          <div
+            key={e.eventId}
+            className="event"
+            style={highlightId === e.eventId ? { border: '1px solid var(--bad)', borderRadius: 4 } : undefined}
+            draggable
+            onDragStart={(ev) => ev.dataTransfer.setData('text/plain', e.eventId)}
+            onDragOver={(ev) => ev.preventDefault()}
+            onDrop={(ev) => {
+              ev.preventDefault();
+              const fromId = ev.dataTransfer.getData('text/plain');
+              if (fromId) reorderEvents(fromId, e.eventId);
+            }}
+          >
+            <span className="drag" title="drag to reorder" style={{ cursor: 'grab', color: 'var(--muted)' }}>⠿</span>
+            <span className="seq">{e.seq}</span>
+            <span>{describe(e, (id) => monLabel(ws, id))}</span>
+            <span className="x" title="edit" style={{ marginLeft: 'auto', color: 'var(--accent)', cursor: 'pointer' }} onClick={() => setEditId(e.eventId)}>✎</span>
+            <span className="x" title="delete" onClick={() => setWs({ ...ws, events: ws.events.filter((x) => x.eventId !== e.eventId) })}>✕</span>
+          </div>
+        ),
+      )}
     </div>
   );
 }

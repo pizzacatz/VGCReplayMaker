@@ -167,14 +167,59 @@ export function nextEventId(): string {
 
 const SLOT_KEYS = ['p1a', 'p1b', 'p2a', 'p2b'] as const;
 
+/** Rebuild the board from a specific event subset; throws if the log is inconsistent. */
+function reconstruct(ws: Workspace, events: MatchEvent[]): ReplayState {
+  const player = new ReplayPlayer(toProtocol(buildLog({ ...ws, events })));
+  return player.stateAt(player.length - 1);
+}
+
 /** The active board after all current events (HP/species reconstructed). Null if the log is invalid. */
 export function currentBoard(ws: Workspace): ReplayState | null {
   try {
-    const player = new ReplayPlayer(toProtocol(buildLog(ws)));
-    return player.stateAt(player.length - 1);
+    return reconstruct(ws, ws.events);
   } catch {
     return null;
   }
+}
+
+export interface LogDiagnosis {
+  /** the reconstructed board, or null if the log is inconsistent */
+  board: ReplayState | null;
+  /** the first event (in seq order) whose inclusion breaks reconstruction, if any */
+  badEventId?: string;
+  /** human-readable reason */
+  message?: string;
+  /** true when the problem is the setup/leads themselves (before any events) */
+  setupProblem?: boolean;
+}
+
+/**
+ * Reconstruct the board and, if it fails, pinpoint WHY: either the setup/leads
+ * are inconsistent, or a specific event (the first one that doesn't apply) is the
+ * culprit. Lets the UI offer a targeted fix instead of a soft-lock.
+ */
+export function diagnoseLog(ws: Workspace): LogDiagnosis {
+  try {
+    return { board: reconstruct(ws, ws.events) };
+  } catch {
+    /* find the culprit below */
+  }
+  // Setup/leads broken on their own (no events applied yet)?
+  try {
+    reconstruct(ws, []);
+  } catch (e) {
+    return { board: null, setupProblem: true, message: `The leads/setup are inconsistent: ${(e as Error).message}` };
+  }
+  // Otherwise: the first event (in seq order) that fails to apply.
+  const sorted = [...ws.events].sort((a, b) => a.seq - b.seq);
+  for (let i = 0; i < sorted.length; i++) {
+    try {
+      reconstruct(ws, sorted.slice(0, i + 1));
+    } catch (e) {
+      return { board: null, badEventId: sorted[i]!.eventId, message: (e as Error).message };
+    }
+  }
+  return { board: null, message: 'The event log could not be reconstructed.' };
 }
 
 export function slotOfMon(board: ReplayState, monId: string): string | null {
