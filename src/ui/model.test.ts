@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { MatchEvent, MatchLog } from '../log';
 import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { broughtInfo, leadMonIds, megaFormeFromItem, moveCanFlinch, planTargets, type MonEntry, type Workspace } from './model';
+import { broughtInfo, leadMonIds, leadSlots, megaFormeFromItem, moveCanFlinch, planTargets, typeEffectiveness, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -77,11 +77,26 @@ const wsWith = (leadsB: string[], events: MatchEvent[]): Workspace => ({
   events,
 });
 
-describe('leadMonIds — explicit selection is respected, no surprise fill', () => {
-  it('uses explicit leads; empty stays empty; only undefined falls back to first two', () => {
+describe('leadMonIds / leadSlots — explicit selection respected, positions preserved', () => {
+  it('respects explicit leads; empty stays empty; only undefined falls back', () => {
     expect(leadMonIds(wsWith(['B2', 'B4'], []).sideB)).toEqual(['B2', 'B4']);
-    expect(leadMonIds(wsWith([], []).sideB)).toEqual([]); // explicit empty → empty (predictable)
-    expect(leadMonIds({ player: 'O', rawPaste: '', mons: sixMon('B') })).toEqual(['B0', 'B1']); // undefined → default
+    expect(leadMonIds(wsWith([], []).sideB)).toEqual([]);
+    expect(leadMonIds({ player: 'O', rawPaste: '', mons: sixMon('B') })).toEqual(['B0', 'B1']);
+  });
+  it('leadSlots keeps left/right positions (empties as "")', () => {
+    expect(leadSlots(wsWith(['B2', 'B4'], []).sideB)).toEqual(['B2', 'B4']);
+    expect(leadSlots(wsWith([], []).sideB)).toEqual(['', '']);
+    expect(leadSlots({ player: 'O', rawPaste: '', mons: sixMon('B') })).toEqual(['B0', 'B1']);
+  });
+});
+
+describe('typeEffectiveness — derived from the type chart, not entered', () => {
+  it('computes SE / immune / 4x / neutral, and null for status moves', () => {
+    expect(typeEffectiveness('Rock Slide', 'Incineroar')?.mult).toBe(2); // Rock vs Fire/Dark
+    expect(typeEffectiveness('Earthquake', 'Zapdos')?.mult).toBe(0); // Ground vs Flying = immune
+    expect(typeEffectiveness('Ice Beam', 'Garchomp')?.mult).toBe(4); // Ice vs Dragon + Ground
+    expect(typeEffectiveness('Surf', 'Garchomp')?.mult).toBe(1); // Water: ×2 Ground, ×0.5 Dragon → neutral
+    expect(typeEffectiveness('Swords Dance', 'Garchomp')).toBeNull();
   });
 });
 

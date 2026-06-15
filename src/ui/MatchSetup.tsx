@@ -1,12 +1,5 @@
 import { useState } from 'react';
-import {
-  BRING_COUNT,
-  broughtInfo,
-  leadMonIds,
-  type SideId,
-  type SideState,
-  type Workspace,
-} from './model';
+import { BRING_COUNT, broughtInfo, leadSlots, type SideId, type SideState, type Workspace } from './model';
 
 export function MatchSetup({ ws, setWs, startOpen }: { ws: Workspace; setWs: (w: Workspace) => void; startOpen: boolean }) {
   const [open, setOpen] = useState(startOpen);
@@ -14,14 +7,14 @@ export function MatchSetup({ ws, setWs, startOpen }: { ws: Workspace; setWs: (w:
   const setSide = (side: SideId, next: SideState) =>
     setWs(side === 'A' ? { ...ws, sideA: next } : { ...ws, sideB: next });
 
-  const toggleLead = (side: SideId, monId: string) => {
+  /** Set a lead slot; selecting a mon already in the other slot swaps their positions. */
+  const setLead = (side: SideId, pos: 0 | 1, monId: string) => {
     const s = side === 'A' ? ws.sideA : ws.sideB;
-    const cur = leadMonIds(s);
-    let leads: string[];
-    if (cur.includes(monId)) leads = cur.filter((x) => x !== monId); // remove
-    else if (cur.length < 2) leads = [...cur, monId]; // add to next open slot
-    else return; // already 2 chosen — remove one first (no surprise replacement)
-    setSide(side, { ...s, leads });
+    const [L, R] = leadSlots(s);
+    let next: [string, string];
+    if (pos === 0) next = monId && R === monId ? [monId, L] : [monId, R];
+    else next = monId && L === monId ? [R, monId] : [L, monId];
+    setSide(side, { ...s, leads: next });
   };
 
   return (
@@ -33,8 +26,8 @@ export function MatchSetup({ ws, setWs, startOpen }: { ws: Workspace; setWs: (w:
       </div>
       {open && (
         <div className="row">
-          <SideSetup side="A" state={ws.sideA} label="You" ws={ws} onToggleLead={toggleLead} />
-          <SideSetup side="B" state={ws.sideB} label="Opponent" ws={ws} onToggleLead={toggleLead} />
+          <SideSetup side="A" state={ws.sideA} ws={ws} onSetLead={setLead} />
+          <SideSetup side="B" state={ws.sideB} ws={ws} onSetLead={setLead} />
         </div>
       )}
     </div>
@@ -44,58 +37,39 @@ export function MatchSetup({ ws, setWs, startOpen }: { ws: Workspace; setWs: (w:
 function SideSetup({
   side,
   state,
-  label,
   ws,
-  onToggleLead,
+  onSetLead,
 }: {
   side: SideId;
   state: SideState;
-  label: string;
   ws: Workspace;
-  onToggleLead: (side: SideId, monId: string) => void;
+  onSetLead: (side: SideId, pos: 0 | 1, monId: string) => void;
 }) {
-  if (state.mons.length === 0) return <div className="col"><div className="muted">{label}: no team</div></div>;
-  const leads = leadMonIds(state);
-  const full = leads.length >= 2;
+  if (state.mons.length === 0) return <div className="col"><div className="muted">{state.player}: no team</div></div>;
+  const [left, right] = leadSlots(state);
   const info = broughtInfo(ws, side);
-  const status = (monId: string): 'lead' | 'brought' | 'not' | 'unknown' => {
-    if (leads.includes(monId)) return 'lead';
-    if (info.notBrought.includes(monId)) return 'not';
-    if (info.brought.includes(monId)) return 'brought';
-    return 'unknown';
-  };
-  const nameOf = (monId?: string) => (monId ? state.mons.find((m) => m.monId === monId)?.parsed.species ?? '—' : '—');
+
+  const leadSelect = (pos: 0 | 1, value: string) => (
+    <select value={value} onChange={(e) => onSetLead(side, pos, e.target.value)}>
+      <option value="">—</option>
+      {state.mons.map((m) => (
+        <option key={m.monId} value={m.monId}>{m.parsed.species}</option>
+      ))}
+    </select>
+  );
 
   return (
     <div className="col">
-      <div className="muted" style={{ fontSize: 12 }}>{label} · click two starters{full ? ' — both set (click one to change)' : leads.length === 1 ? ' — pick one more' : ''}</div>
-      <div className="chips" style={{ margin: '6px 0' }}>
-        <span className="chip">Lead L: <strong>{nameOf(leads[0])}</strong></span>
-        <span className="chip">Lead R: <strong>{nameOf(leads[1])}</strong></span>
-      </div>
-      <div className="chips">
-        {state.mons.map((m) => {
-          const st = status(m.monId);
-          const isLead = st === 'lead';
-          const pos = leads.indexOf(m.monId);
-          // when two are chosen, dim the non-leads so it's clear you remove one first
-          const dim = (!isLead && full) || st === 'not';
-          return (
-            <button
-              key={m.monId}
-              className={isLead ? 'primary' : ''}
-              style={dim ? { opacity: 0.4, ...(st === 'not' ? { textDecoration: 'line-through' } : {}) } : undefined}
-              onClick={() => onToggleLead(side, m.monId)}
-              title={isLead ? `lead (${pos === 0 ? 'left' : 'right'}) — click to remove` : st === 'brought' ? 'brought (switched in)' : st === 'not' ? 'deduced NOT brought' : full ? 'remove a lead first' : 'click to set as a lead'}
-            >
-              {m.parsed.species + (isLead ? ` ◀${pos === 0 ? 'L' : 'R'}` : st === 'brought' ? ' ✓' : st === 'not' ? ' ✗' : '')}
-            </button>
-          );
-        })}
-      </div>
+      <div className="muted" style={{ fontSize: 12 }}>{state.player} · starting Pokémon</div>
+      <div className="field"><label>Left lead</label>{leadSelect(0, left)}</div>
+      <div className="field"><label>Right lead</label>{leadSelect(1, right)}</div>
       <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
         {`Brought ${info.brought.length}/${BRING_COUNT}` +
-          (info.confirmed ? ` — bring confirmed; ${info.notBrought.length} deduced not brought` : info.unknown.length ? ` — ${info.unknown.length} still unseen (possibly brought)` : '')}
+          (info.confirmed
+            ? ` — bring confirmed; not brought: ${info.notBrought.map((id) => state.mons.find((m) => m.monId === id)?.parsed.species).join(', ')}`
+            : info.unknown.length
+              ? ` — ${info.unknown.length} still unseen (possibly brought)`
+              : '')}
       </div>
     </div>
   );

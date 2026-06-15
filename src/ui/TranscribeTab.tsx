@@ -12,11 +12,13 @@ import {
   planTargets,
   slotOfMon,
   slotPosition,
+  typeEffectiveness,
   type MonEntry,
   type Workspace,
 } from './model';
 import { AdvancedEvents } from './AdvancedEvents';
 import { MatchSetup } from './MatchSetup';
+import { EventEditor } from './EventEditor';
 
 type Mode = 'idle' | 'move' | 'switch';
 type Cert = 'clean' | 'composite' | 'unresolved';
@@ -26,11 +28,10 @@ interface TargetOutcome {
   hpAfter: string;
   crit: boolean;
   flinch: boolean;
-  eff: string;
   missed: boolean;
   status: Cert;
 }
-const blankOutcome = (): TargetOutcome => ({ hpAfter: '', crit: false, flinch: false, eff: '1x', missed: false, status: 'clean' });
+const blankOutcome = (): TargetOutcome => ({ hpAfter: '', crit: false, flinch: false, missed: false, status: 'clean' });
 
 export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspace) => void }) {
   const board = useMemo(() => currentBoard(ws), [ws]);
@@ -40,6 +41,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   const [targets, setTargets] = useState<string[]>([]);
   const [outcomes, setOutcomes] = useState<Record<string, TargetOutcome>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
 
   const currentTurn = useMemo(() => {
     const ts = ws.events.filter((e) => e.type === 'turn_start');
@@ -111,12 +113,27 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
 
   const toggleTarget = (t: string) => {
     if (plan?.spread) return;
+    // single-target moves allow exactly one target: select it (or deselect).
     if (targets.includes(t)) {
-      setTargets(targets.filter((x) => x !== t));
+      setTargets([]);
     } else {
-      setTargets([...targets, t]);
-      if (!outcomes[t]) setOutcome(t, {});
+      setTargets([t]);
+      setOutcomes({ [t]: outcomes[t] ?? blankOutcome() });
     }
+  };
+
+  // effectiveness derived from the dex (move type vs the target's current types)
+  const effOf = (targetMonId: string): ReturnType<typeof typeEffectiveness> =>
+    move ? typeEffectiveness(move, actives.find((a) => a.monId === targetMonId)?.species ?? '') : null;
+
+  const reorderEvents = (fromId: string, toId: string) => {
+    const sorted = [...ws.events].sort((a, b) => a.seq - b.seq);
+    const from = sorted.findIndex((e) => e.eventId === fromId);
+    const to = sorted.findIndex((e) => e.eventId === toId);
+    if (from < 0 || to < 0 || from === to) return;
+    const [moved] = sorted.splice(from, 1);
+    sorted.splice(to, 0, moved!);
+    setWs({ ...ws, events: sorted.map((e, i) => ({ ...e, seq: i + 1 })) });
   };
 
   const actorEntry = actor ? entryOf(actor) : undefined;
@@ -144,7 +161,8 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         const slot = slotOfMon(board, t);
         const before = slot ? board.slots[slot]!.hp : 0;
         const after = Number(o.hpAfter);
-        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit: o.crit, status: o.status, observedEffectiveness: o.eff }));
+        const eff = effOf(t)?.label ?? '1x'; // derived from the type chart, not entered
+        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit: o.crit, status: o.status, observedEffectiveness: eff }));
         if (canFlinch && o.flinch) {
           builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'flinch', outcome: 'yes' }));
         }
@@ -179,7 +197,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
           <span className="muted">Click the acting Pokémon, then its move.</span>
         </div>
 
-        <Board actives={actives} actor={actor} onPick={pickActor} />
+        <Board actives={actives} actor={actor} onPick={pickActor} youName={ws.sideA.player} oppName={ws.sideB.player} />
 
         {actor && (
           <div className="panel" style={{ marginTop: 12, background: 'var(--panel2)' }}>
@@ -229,9 +247,15 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                   const slot = slotOfMon(board, t);
                   const before = slot ? board.slots[slot]!.hp : 0;
                   const o = outcomes[t] ?? blankOutcome();
+                  const eff = effOf(t);
                   return (
                     <div className="panel" key={t} style={{ marginTop: 8 }}>
                       <strong>{monLabel(ws, t)}</strong>
+                      {eff && (
+                        <span className="chip" style={{ marginLeft: 8, color: eff.mult > 1 ? 'var(--good)' : eff.mult < 1 ? 'var(--warn)' : 'var(--muted)' }}>
+                          {eff.text}
+                        </span>
+                      )}
                       <div className="controls" style={{ flexWrap: 'wrap', marginTop: 4 }}>
                         <label className="chip"><input type="checkbox" checked={o.missed} onChange={(e) => setOutcome(t, { missed: e.target.checked })} /> missed</label>
                         {!o.missed && (
@@ -241,7 +265,6 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                             <span className="muted">{o.hpAfter !== '' ? `= ${before - Number(o.hpAfter)} dmg` : ''}</span>
                             <label className="chip"><input type="checkbox" checked={o.crit} onChange={(e) => setOutcome(t, { crit: e.target.checked })} /> crit</label>
                             {canFlinch && <label className="chip"><input type="checkbox" checked={o.flinch} onChange={(e) => setOutcome(t, { flinch: e.target.checked })} /> flinched</label>}
-                            <select value={o.eff} onChange={(e) => setOutcome(t, { eff: e.target.value })}>{['0.25x', '0.5x', '1x', '2x', '4x'].map((x) => <option key={x}>{x}</option>)}</select>
                             <select value={o.status} onChange={(e) => setOutcome(t, { status: e.target.value as Cert })}>
                               <option value="clean">clean</option>
                               <option value="composite">composite</option>
@@ -288,19 +311,46 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
       <div className="col panel">
         <h2>Event log ({ws.events.length})</h2>
         {ws.events.length === 0 && <p className="muted">No events yet. Set your leads above, then click a Pokémon to start.</p>}
-        {[...ws.events].sort((a, b) => a.seq - b.seq).map((e) => (
-          <div key={e.eventId} className="event">
-            <span className="seq">{e.seq}</span>
-            <span>{describe(e, (id) => monLabel(ws, id))}</span>
-            <span className="x" onClick={() => setWs({ ...ws, events: ws.events.filter((x) => x.eventId !== e.eventId) })}>✕</span>
-          </div>
-        ))}
+        {ws.events.length > 0 && <p className="muted" style={{ fontSize: 11 }}>drag ⠿ to reorder · click ✎ to edit</p>}
+        {[...ws.events].sort((a, b) => a.seq - b.seq).map((e) =>
+          editId === e.eventId ? (
+            <EventEditor
+              key={e.eventId}
+              ws={ws}
+              event={e}
+              onCancel={() => setEditId(null)}
+              onSave={(updated) => {
+                setWs({ ...ws, events: ws.events.map((x) => (x.eventId === updated.eventId ? updated : x)) });
+                setEditId(null);
+              }}
+            />
+          ) : (
+            <div
+              key={e.eventId}
+              className="event"
+              draggable
+              onDragStart={(ev) => ev.dataTransfer.setData('text/plain', e.eventId)}
+              onDragOver={(ev) => ev.preventDefault()}
+              onDrop={(ev) => {
+                ev.preventDefault();
+                const fromId = ev.dataTransfer.getData('text/plain');
+                if (fromId) reorderEvents(fromId, e.eventId);
+              }}
+            >
+              <span className="drag" title="drag to reorder" style={{ cursor: 'grab', color: 'var(--muted)' }}>⠿</span>
+              <span className="seq">{e.seq}</span>
+              <span>{describe(e, (id) => monLabel(ws, id))}</span>
+              <span className="x" title="edit" style={{ marginLeft: 'auto', color: 'var(--accent)', cursor: 'pointer' }} onClick={() => setEditId(e.eventId)}>✎</span>
+              <span className="x" title="delete" onClick={() => setWs({ ...ws, events: ws.events.filter((x) => x.eventId !== e.eventId) })}>✕</span>
+            </div>
+          ),
+        )}
       </div>
     </div>
   );
 }
 
-function Board({ actives, actor, onPick }: { actives: ReturnType<typeof activeMonIds>; actor: string | null; onPick: (id: string) => void }) {
+function Board({ actives, actor, onPick, youName, oppName }: { actives: ReturnType<typeof activeMonIds>; actor: string | null; onPick: (id: string) => void; youName: string; oppName: string }) {
   const foes = actives.filter((m) => m.side === 'B');
   const you = actives.filter((m) => m.side === 'A');
   const card = (m: ReturnType<typeof activeMonIds>[number]) => (
@@ -317,9 +367,9 @@ function Board({ actives, actor, onPick }: { actives: ReturnType<typeof activeMo
   );
   return (
     <>
-      <div className="muted" style={{ fontSize: 12 }}>Opponent</div>
+      <div className="muted" style={{ fontSize: 12 }}>{oppName}</div>
       <div className="board">{foes.length ? foes.map(card) : <span className="muted">no active mon — set leads above</span>}</div>
-      <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>You</div>
+      <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>{youName}</div>
       <div className="board">{you.length ? you.map(card) : <span className="muted">no active mon — set leads above</span>}</div>
     </>
   );

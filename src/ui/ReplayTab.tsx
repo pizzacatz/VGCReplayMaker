@@ -45,9 +45,9 @@ export function ReplayTab({ ws }: { ws: Workspace }) {
         {current ? current.line : '(pre-battle)'}
       </div>
 
-      <h2>Opponent (p2)</h2>
+      <h2>{ws.sideB.player} (p2)</h2>
       <div className="board">{SLOTS.slice(2).map((s) => <Slot key={s} state={state.slots[s] ?? null} />)}</div>
-      <h2>You (p1)</h2>
+      <h2>{ws.sideA.player} (p1)</h2>
       <div className="board">{SLOTS.slice(0, 2).map((s) => <Slot key={s} state={state.slots[s] ?? null} />)}</div>
 
       <FieldStrip state={state} />

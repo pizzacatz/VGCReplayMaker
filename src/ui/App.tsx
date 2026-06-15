@@ -39,7 +39,8 @@ export function App() {
     <div className="app notranslate" translate="no">
       <h1>Champions Match Analysis</h1>
       <p className="muted">
-        Single-user scouting tool · Regulation M-A · open sheets. Honest about what the data proves vs. guesses.
+        {ws.round ? <strong style={{ color: 'var(--text)' }}>{ws.round} · </strong> : null}
+        {ws.sideA.player} vs {ws.sideB.player} · Regulation M-A · open sheets.
       </p>
       <div className="tabs">
         {tabs.map(([id, label]) => (

@@ -29,7 +29,7 @@ function SidePanel({
         <label>Player name</label>
         <input value={state.player} onChange={(e) => onChange({ ...state, player: e.target.value })} />
       </div>
-      <h2>Pokepaste ({side === 'A' ? 'your side' : 'opponent'})</h2>
+      <h2>Pokepaste — {state.player || (side === 'A' ? 'side A' : 'side B')}</h2>
       <textarea
         placeholder={'Paste a team here. Omit the spread line to have the solver reverse-engineer it.'}
         value={state.rawPaste}
@@ -83,9 +83,23 @@ function SidePanel({
 
 export function TeamsTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspace) => void }) {
   return (
-    <div className="row">
-      <SidePanel side="A" state={ws.sideA} onChange={(sideA) => setWs({ ...ws, sideA })} />
-      <SidePanel side="B" state={ws.sideB} onChange={(sideB) => setWs({ ...ws, sideB })} />
+    <div>
+      <div className="panel" style={{ marginBottom: 12 }}>
+        <div className="field">
+          <label>Round / match</label>
+          <input
+            value={ws.round ?? ''}
+            onChange={(e) => setWs({ ...ws, round: e.target.value })}
+            placeholder="e.g. Top 4B, Round 8, Pool A R3"
+            style={{ minWidth: 260 }}
+          />
+          <span className="muted">labels this transcription (for your review notes)</span>
+        </div>
+      </div>
+      <div className="row">
+        <SidePanel side="A" state={ws.sideA} onChange={(sideA) => setWs({ ...ws, sideA })} />
+        <SidePanel side="B" state={ws.sideB} onChange={(sideB) => setWs({ ...ws, sideB })} />
+      </div>
     </div>
   );
 }

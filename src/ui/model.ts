@@ -28,6 +28,8 @@ export interface SideState {
 }
 
 export interface Workspace {
+  /** tournament/round label, e.g. "Top 4B", "Round 8" */
+  round?: string;
   sideA: SideState;
   sideB: SideState;
   events: MatchEvent[];
@@ -35,20 +37,27 @@ export interface Workspace {
 
 export function emptyWorkspace(): Workspace {
   return {
-    sideA: { player: 'You', rawPaste: '', mons: [], leads: [] },
-    sideB: { player: 'Opponent', rawPaste: '', mons: [], leads: [] },
+    round: '',
+    sideA: { player: 'Player 1', rawPaste: '', mons: [], leads: [] },
+    sideB: { player: 'Player 2', rawPaste: '', mons: [], leads: [] },
     events: [],
   };
 }
 
 /**
- * The starting mon ids for a side. Once `leads` is set (even to a partial/empty
- * list) it is respected exactly — no surprise auto-fill. Only a never-set
- * (undefined) leads list falls back to the first two (legacy/default).
+ * The two lead SLOTS [left, right] for a side, '' where empty. Positions are
+ * preserved (unlike leadMonIds, which drops empties). Undefined leads (legacy)
+ * default to the first two.
  */
+export function leadSlots(side: SideState): [string, string] {
+  const valid = (id?: string): string => (id && side.mons.some((m) => m.monId === id) ? id : '');
+  if (side.leads !== undefined) return [valid(side.leads[0]), valid(side.leads[1])];
+  return [side.mons[0]?.monId ?? '', side.mons[1]?.monId ?? ''];
+}
+
+/** The starting mon ids for a side (non-empty lead slots, left→right order). */
 export function leadMonIds(side: SideState): string[] {
-  if (side.leads !== undefined) return side.leads.filter((id) => side.mons.some((m) => m.monId === id)).slice(0, 2);
-  return side.mons.slice(0, 2).map((m) => m.monId);
+  return leadSlots(side).filter(Boolean);
 }
 
 export type SideId = 'A' | 'B';
@@ -98,10 +107,11 @@ export function toSpec(parsed: ParsedMon): MonSpec {
 
 export function buildLog(ws: Workspace): MatchLog {
   const sheet = (m: MonEntry) => ({ monId: m.monId, species: m.parsed.species, maxHp: m.observedMaxHp, ...(m.parsed.nickname ? { nickname: m.parsed.nickname } : {}) });
-  const leads = [
-    ...leadMonIds(ws.sideA).map((monId, i) => ({ side: 'A' as const, position: i as Position, monId })),
-    ...leadMonIds(ws.sideB).map((monId, i) => ({ side: 'B' as const, position: i as Position, monId })),
-  ];
+  const slotLeads = (side: SideState, sideId: SideId) =>
+    leadSlots(side)
+      .map((monId, i) => (monId ? { side: sideId, position: i as Position, monId } : null))
+      .filter((x): x is { side: SideId; position: Position; monId: string } => x !== null);
+  const leads = [...slotLeads(ws.sideA, 'A'), ...slotLeads(ws.sideB, 'B')];
   return {
     matchId: 'workspace',
     format: 'Champions Reg M-A',
@@ -248,6 +258,56 @@ export function megaFormeFromItem(item: string | undefined, species: string): st
     const data = Dex.items.get(item) as { exists: boolean; megaStone?: Record<string, string> };
     if (!data.exists || !data.megaStone) return null;
     return data.megaStone[species] ?? Object.values(data.megaStone)[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+interface DexTypeOps {
+  getEffectiveness(source: string, target: string): number;
+  getImmunity(source: string, target: string): boolean;
+}
+
+function effLabel(mult: number): string {
+  if (mult === 0) return '0x';
+  if (mult === 0.25) return '0.25x';
+  if (mult === 0.5) return '0.5x';
+  if (mult === 2) return '2x';
+  if (mult === 4) return '4x';
+  return '1x';
+}
+
+export interface Effectiveness {
+  mult: number;
+  label: string;
+  /** human phrasing for the UI */
+  text: string;
+}
+
+/**
+ * Type effectiveness of a move against a defender, derived from the dex type chart
+ * (move type vs defender's current types) — so the transcriber doesn't pick it.
+ * Returns null for status/unknown moves. Note: does not account for ability-based
+ * immunities (Levitate, etc.) — those show up as 0 damage on screen regardless.
+ */
+export function typeEffectiveness(move: string, defenderSpecies: string): Effectiveness | null {
+  try {
+    const m = Dex.moves.get(move);
+    if (!m.exists || m.category === 'Status') return null;
+    const sp = Dex.species.get(defenderSpecies);
+    if (!sp.exists) return null;
+    const ops = Dex as unknown as DexTypeOps;
+    let mult = 1;
+    for (const dt of sp.types) {
+      if (!ops.getImmunity(m.type, dt)) {
+        mult = 0;
+        break;
+      }
+      mult *= 2 ** ops.getEffectiveness(m.type, dt);
+    }
+    const label = effLabel(mult);
+    const text = mult === 0 ? 'immune' : mult > 1 ? `super effective (${label})` : mult < 1 ? `resisted (${label})` : `neutral (1x)`;
+    return { mult, label, text };
   } catch {
     return null;
   }

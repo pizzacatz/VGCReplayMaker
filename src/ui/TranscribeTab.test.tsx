@@ -98,6 +98,29 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText('Event log (3)')).toBeTruthy(); // move_used + 2 damage
   });
 
+  it('single-target move allows exactly one target (clicking another switches)', () => {
+    const { getAllByText, getByText, getAllByPlaceholderText } = render(<Harness />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Flare Blitz')); // single-target
+    expect(getAllByPlaceholderText('hp after')).toHaveLength(1);
+    // Annihilape is the other foe — selecting its target chip should switch, not add
+    fireEvent.click(getAllByText('Annihilape').at(-1)!);
+    expect(getAllByPlaceholderText('hp after')).toHaveLength(1);
+  });
+
+  it('a logged event can be edited inline', () => {
+    const { getAllByText, getByText, getByPlaceholderText, getByLabelText } = render(<Harness />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Flare Blitz'));
+    fireEvent.change(getByPlaceholderText('hp after'), { target: { value: '150' } });
+    fireEvent.click(getByText('Log action'));
+    // edit the damage event (second event after move_used)
+    fireEvent.click(getAllByText('✎')[1]!);
+    fireEvent.change(getByLabelText('HP after'), { target: { value: '99' } });
+    fireEvent.click(getByText('Save'));
+    expect(getByText(/→99/)).toBeTruthy(); // event log reflects the edit
+  });
+
   it('a Pokémon holding a mega stone shows a Mega Evolve button (no forme choice)', () => {
     const aero = entry('A', 0, 'Aerodactyl', ['Rock Slide']);
     aero.parsed.item = 'Aerodactylite';
