@@ -12,17 +12,31 @@ import type { Gen, MonSpec } from '../engine';
 import type { SolverHit } from '../solver';
 import type { MatchEvent, MatchLog, Side } from '../log';
 
+/** The Mega forme a mon is in just before `seq` (a mon can't un-Mega), else undefined. */
+function megaFormeAt(log: MatchLog, monId: string, seq: number): string | undefined {
+  let forme: string | undefined;
+  for (const ev of [...log.events].sort((a, b) => a.seq - b.seq)) {
+    if (ev.seq >= seq) break;
+    if (ev.type === 'mega_evolution' && ev.mon === monId) forme = ev.megaSpecies;
+  }
+  return forme;
+}
+
 /** Clean damage events → solver hits. Composite/unresolved are excluded (§D3). */
 export function extractCleanHits(log: MatchLog): SolverHit[] {
   const hits: SolverHit[] = [];
   for (const ev of [...log.events].sort((a, b) => a.seq - b.seq)) {
     if (ev.type !== 'damage' || ev.status !== 'clean') continue;
+    const aForme = megaFormeAt(log, ev.attacker, ev.seq); // post-Mega hits use the Mega's stats
+    const dForme = megaFormeAt(log, ev.defender, ev.seq);
     hits.push({
       attackerId: ev.attacker,
       defenderId: ev.defender,
       move: ev.move,
       observedDamage: ev.hpBefore - ev.hpAfter, // exact integer (Constitution §C3)
       ...(ev.crit ? { crit: ev.crit } : {}),
+      ...(aForme ? { attackerSpecies: aForme } : {}),
+      ...(dForme ? { defenderSpecies: dForme } : {}),
     });
   }
   return hits;
@@ -33,6 +47,9 @@ export interface ExtractedSpeedFact {
   second: string;
   samePriorityBracket: boolean;
   trickRoom?: boolean;
+  /** Mega forme of each mover at the time (changes its Speed base), if any. */
+  firstSpecies?: string;
+  secondSpecies?: string;
 }
 
 export interface SpeedExtraction {
@@ -77,11 +94,15 @@ export function extractSpeedFacts(log: MatchLog, gen: Gen, specs: Map<string, Mo
           skipped.push({ turn, first: a.user, second: b.user, reason });
           continue;
         }
+        const fForme = megaFormeAt(log, a.user, a.seq);
+        const sForme = megaFormeAt(log, b.user, a.seq);
         facts.push({
           first: a.user,
           second: b.user,
           samePriorityBracket: true,
           ...(isActiveAt(log, 'Trick Room', undefined, a.seq) ? { trickRoom: true } : {}),
+          ...(fForme ? { firstSpecies: fForme } : {}),
+          ...(sForme ? { secondSpecies: sForme } : {}),
         });
       }
     }

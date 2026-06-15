@@ -145,6 +145,8 @@ export function runSolve(ws: Workspace): SolveResult {
     secondId: f.second,
     samePriorityBracket: f.samePriorityBracket,
     ...(f.trickRoom ? { trickRoom: true } : {}),
+    ...(f.firstSpecies ? { firstSpecies: f.firstSpecies } : {}),
+    ...(f.secondSpecies ? { secondSpecies: f.secondSpecies } : {}),
   }));
   const mons = allMons(ws).map((m) => ({ id: m.monId, spec: toSpec(m.parsed), observedMaxHp: m.observedMaxHp }));
   const system = new ConstraintSystem(gen, mons, hits, speed);

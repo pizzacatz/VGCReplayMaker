@@ -106,6 +106,12 @@ function baseStat(gen: Gen, species: string, stat: StatKey): number {
   return baseStatOf(gen, species, stat);
 }
 
+/** A species' primary (slot-0) ability — e.g. a Mega forme's fixed ability (Huge Power). */
+export function primaryAbilityOf(gen: Gen, species: string): string | undefined {
+  const data = gen.species.get(toID(species));
+  return (data?.abilities as Record<string, string> | undefined)?.['0'];
+}
+
 /**
  * Build a calc Pokemon for a candidate stat, then ENFORCE that the calc's
  * computed stat equals the conversion module's (R5 / Validation U6.5). A

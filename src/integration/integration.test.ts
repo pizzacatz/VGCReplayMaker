@@ -140,3 +140,27 @@ describe('bridge — log → aggregation Game', () => {
     expect(game.cleanHits[0]!.defender).toEqual({ instanceId: 'Y', monId: 'gar' });
   });
 });
+
+describe('Mega forme — post-Mega hits use the Mega forme stats (extraction)', () => {
+  // A log where Mawile Mega-Evolves on turn 1, then lands a clean Iron Head.
+  function megaLog(observedDamage: number): MatchLog {
+    return {
+      matchId: 'mega', format: 'Champions Reg M-A',
+      sideA: { player: 'W', mons: [{ monId: 'maw', species: 'Mawile', maxHp: 125 }] },
+      sideB: { player: 'O', mons: [{ monId: 'gar', species: 'Garchomp', maxHp: 183 }] },
+      leads: [{ side: 'A', position: 0, monId: 'maw' }, { side: 'B', position: 0, monId: 'gar' }],
+      events: [
+        { eventId: 't1', seq: 1, turn: 1, type: 'turn_start' },
+        { eventId: 'mega', seq: 2, turn: 1, type: 'mega_evolution', mon: 'maw', megaSpecies: 'Mawile-Mega' },
+        { eventId: 'm1', seq: 3, turn: 1, type: 'move_used', user: 'maw', move: 'Iron Head', targets: ['gar'] },
+        { eventId: 'd1', seq: 4, turn: 1, type: 'damage', attacker: 'maw', move: 'Iron Head', defender: 'gar', hpBefore: 183, hpAfter: 183 - observedDamage, crit: false, status: 'clean' },
+      ],
+    };
+  }
+
+  it('tags the clean hit with the attacker’s Mega forme', () => {
+    const hits = extractCleanHits(megaLog(60));
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.attackerSpecies).toBe('Mawile-Mega'); // forme-at-hit-time captured
+  });
+});

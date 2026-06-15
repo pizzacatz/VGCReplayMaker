@@ -563,12 +563,16 @@ export function solveTournament(t: Tournament): Map<string, InstanceReport> {
         move: h.move,
         observedDamage: h.observedDamage,
         ...(h.crit !== undefined ? { crit: h.crit } : {}),
+        ...(h.attackerSpecies ? { attackerSpecies: h.attackerSpecies } : {}),
+        ...(h.defenderSpecies ? { defenderSpecies: h.defenderSpecies } : {}),
       }));
       const speedFacts: GameSpeedFact[] = extractSpeedFacts(log, gen, specs).facts.map((f) => ({
         first: ref(f.first),
         second: ref(f.second),
         samePriorityBracket: f.samePriorityBracket,
         ...(f.trickRoom !== undefined ? { trickRoom: f.trickRoom } : {}),
+        ...(f.firstSpecies ? { firstSpecies: f.firstSpecies } : {}),
+        ...(f.secondSpecies ? { secondSpecies: f.secondSpecies } : {}),
       }));
       db.addGame({
         gameId: game.gameId,

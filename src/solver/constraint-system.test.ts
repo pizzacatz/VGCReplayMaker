@@ -154,3 +154,36 @@ describe('U4.3.8 — contradiction yields an empty set and a flag, never a force
     SLOW,
   );
 });
+
+describe('Mega forme stats in the damage factor', () => {
+  // Mawile (base) vs Mega Mawile (Huge Power) — the post-Mega hit must be solved
+  // with the Mega forme's stats, so the SAME big hit implies a MUCH lower Attack SP.
+  const mawile: MonSpec = { species: 'Mawile', alignment: 'neutral' };
+  const garchompN: MonSpec = { species: 'Garchomp', alignment: 'neutral' };
+
+  // Ground truth: Mega Mawile (Huge Power) at Attack SP 0 vs Garchomp Def SP 0.
+  const megaRolls = predictHit(gen, {
+    attacker: { species: 'Mawile-Mega', alignment: 'neutral', ability: 'Huge Power' },
+    attackerSp: 0,
+    defender: garchompN,
+    defenderSp: 0,
+    move: 'Iron Head',
+  }).rolls;
+  const observedDamage = megaRolls[7]!; // a representative roll
+
+  const attacker: SolverMon = { id: 'M', spec: mawile, observedMaxHp: 50 + 75 }; // Mawile base HP 50
+  const defender: SolverMon = { id: 'G', spec: garchompN, observedMaxHp: 108 + 75 };
+  const hit = { attackerId: 'M', defenderId: 'G', move: 'Iron Head', observedDamage };
+
+  it('with the Mega forme, a low Attack SP explains the big hit', () => {
+    const r = new ConstraintSystem(gen, [attacker, defender], [{ ...hit, attackerSpecies: 'Mawile-Mega' }]).propagate();
+    expect(r.contradictions).toHaveLength(0);
+    expect(r.domains.get('M')!.get('atk')!).toContain(0); // SP 0 feasible because Huge Power did the work
+  });
+
+  it('without the forme override, base Mawile cannot reach that damage at low Attack SP', () => {
+    const r = new ConstraintSystem(gen, [attacker, defender], [{ ...hit }]).propagate();
+    // base Mawile (no Huge Power) needs far more Attack — SP 0 is pruned out.
+    expect(r.domains.get('M')!.get('atk')!).not.toContain(0);
+  });
+}, SLOW);

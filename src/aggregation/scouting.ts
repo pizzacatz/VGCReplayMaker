@@ -64,6 +64,9 @@ export interface GameHit {
   move: string;
   observedDamage: number;
   crit?: boolean;
+  /** Mega forme of attacker/defender at hit time, if any (uses that forme's stats). */
+  attackerSpecies?: string;
+  defenderSpecies?: string;
 }
 
 export interface GameSpeedFact {
@@ -74,6 +77,9 @@ export interface GameSpeedFact {
   firstControl?: SpeedControl;
   secondControl?: SpeedControl;
   tie?: boolean;
+  /** Mega forme of each mover at the time, if any (uses that forme's Speed base). */
+  firstSpecies?: string;
+  secondSpecies?: string;
 }
 
 export interface Game {
@@ -172,6 +178,8 @@ export class ScoutingDB {
           move: hit.move,
           observedDamage: hit.observedDamage,
           ...(hit.crit !== undefined ? { crit: hit.crit } : {}),
+          ...(hit.attackerSpecies ? { attackerSpecies: hit.attackerSpecies } : {}),
+          ...(hit.defenderSpecies ? { defenderSpecies: hit.defenderSpecies } : {}),
         });
       }
       for (const sf of game.speedFacts ?? []) {
@@ -184,6 +192,8 @@ export class ScoutingDB {
           ...(sf.firstControl ? { firstControl: sf.firstControl } : {}),
           ...(sf.secondControl ? { secondControl: sf.secondControl } : {}),
           ...(sf.tie !== undefined ? { tie: sf.tie } : {}),
+          ...(sf.firstSpecies ? { firstSpecies: sf.firstSpecies } : {}),
+          ...(sf.secondSpecies ? { secondSpecies: sf.secondSpecies } : {}),
         });
       }
     }

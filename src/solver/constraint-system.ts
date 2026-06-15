@@ -20,7 +20,7 @@
  * pair fused (wide marginals); a second matchup sharing a variable separates them.
  */
 
-import { baseStatOf, championsExceptions, roleOf, type ExceptionRegistry, type Gen, type MonSpec } from '../engine';
+import { baseStatOf, championsExceptions, primaryAbilityOf, roleOf, type ExceptionRegistry, type Gen, type MonSpec } from '../engine';
 import { maxHpToSpHp, spToFinal, SP_BUDGET, SP_MAX, SP_MIN, type StatKey } from '../conversion';
 import { damageFactor } from './damage-factor';
 import { structuralPrior, type SpreadPrior } from './prior';
@@ -42,6 +42,10 @@ export interface SolverHit {
   /** exact integer damage = hp_before − hp_after */
   observedDamage: number;
   crit?: boolean | undefined;
+  /** forme in play at hit time, if different from the sheet (e.g. a Mega) — uses
+   *  that forme's base stats + ability for THIS hit; the SP variable is unchanged. */
+  attackerSpecies?: string | undefined;
+  defenderSpecies?: string | undefined;
 }
 
 /** A multiplicative speed-control modifier, applied as floor(speed × num / den). */
@@ -67,6 +71,9 @@ export interface SpeedFact {
   secondControl?: SpeedControl | undefined;
   /** a known speed tie → equality rather than inequality. */
   tie?: boolean | undefined;
+  /** forme in play at the time (e.g. a Mega) — uses that forme's Speed base. */
+  firstSpecies?: string | undefined;
+  secondSpecies?: string | undefined;
 }
 
 export interface PhaseAResult {
@@ -343,11 +350,21 @@ export class ConstraintSystem {
       );
     }
 
+    // A hit's attacker/defender may be in a Mega forme at the time: use that forme's
+    // base stats + ability for this hit, while the SP variable stays the mon's own.
+    const formeSpec = (base: MonSpec, species?: string): MonSpec => {
+      if (!species || species === base.species) return base;
+      const ability = primaryAbilityOf(gen, species);
+      return { ...base, species, ...(ability ? { ability } : {}) };
+    };
+
     for (const hit of hits) {
-      const attacker = specs.get(hit.attackerId);
-      const defender = specs.get(hit.defenderId);
-      if (!attacker) throw new Error(`hit references unknown attacker ${hit.attackerId}`);
-      if (!defender) throw new Error(`hit references unknown defender ${hit.defenderId}`);
+      const attackerBase = specs.get(hit.attackerId);
+      const defenderBase = specs.get(hit.defenderId);
+      if (!attackerBase) throw new Error(`hit references unknown attacker ${hit.attackerId}`);
+      if (!defenderBase) throw new Error(`hit references unknown defender ${hit.defenderId}`);
+      const attacker = formeSpec(attackerBase, hit.attackerSpecies);
+      const defender = formeSpec(defenderBase, hit.defenderSpecies);
       const factor = damageFactor(
         gen,
         { attacker, defender, move: hit.move, observedDamage: hit.observedDamage, crit: hit.crit },
@@ -377,10 +394,12 @@ export class ConstraintSystem {
     for (const fact of speedFacts) {
       // §4 guard: orderings across different priority brackets carry NO speed info.
       if (!fact.samePriorityBracket) continue;
-      const first = specs.get(fact.firstId);
-      const second = specs.get(fact.secondId);
-      if (!first) throw new Error(`speed fact references unknown mon ${fact.firstId}`);
-      if (!second) throw new Error(`speed fact references unknown mon ${fact.secondId}`);
+      const firstBase = specs.get(fact.firstId);
+      const secondBase = specs.get(fact.secondId);
+      if (!firstBase) throw new Error(`speed fact references unknown mon ${fact.firstId}`);
+      if (!secondBase) throw new Error(`speed fact references unknown mon ${fact.secondId}`);
+      const first = formeSpec(firstBase, fact.firstSpecies);
+      const second = formeSpec(secondBase, fact.secondSpecies);
       const fBase = baseStatOf(gen, first.species, 'spe');
       const sBase = baseStatOf(gen, second.species, 'spe');
       const fRole = roleOf(first.alignment, 'spe');
