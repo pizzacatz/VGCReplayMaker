@@ -20,8 +20,8 @@
  * pair fused (wide marginals); a second matchup sharing a variable separates them.
  */
 
-import { baseStatOf, championsExceptions, type ExceptionRegistry, type Gen, type MonSpec } from '../engine';
-import { maxHpToSpHp, SP_BUDGET, SP_MAX, SP_MIN, type StatKey } from '../conversion';
+import { baseStatOf, championsExceptions, roleOf, type ExceptionRegistry, type Gen, type MonSpec } from '../engine';
+import { maxHpToSpHp, spToFinal, SP_BUDGET, SP_MAX, SP_MIN, type StatKey } from '../conversion';
 import { damageFactor } from './damage-factor';
 
 export type NonHpStat = Exclude<StatKey, 'hp'>;
@@ -41,6 +41,31 @@ export interface SolverHit {
   /** exact integer damage = hp_before − hp_after */
   observedDamage: number;
   crit?: boolean | undefined;
+}
+
+/** A multiplicative speed-control modifier, applied as floor(speed × num / den). */
+export interface SpeedControl {
+  num: number;
+  den: number;
+}
+
+/**
+ * One observed move-order fact (Constraint §4). `firstId` acted before `secondId`
+ * THIS turn. Only meaningful within the SAME priority bracket — set
+ * `samePriorityBracket: false` for a cross-bracket order (a priority move going
+ * first) and it contributes NO speed constraint (the mandatory §4 guard).
+ */
+export interface SpeedFact {
+  firstId: string;
+  secondId: string;
+  samePriorityBracket: boolean;
+  /** Trick Room reverses the comparison (slower acts first). */
+  trickRoom?: boolean | undefined;
+  /** observed speed-control state on each side (Tailwind, paralysis, Choice Scarf…). */
+  firstControl?: SpeedControl | undefined;
+  secondControl?: SpeedControl | undefined;
+  /** a known speed tie → equality rather than inequality. */
+  tie?: boolean | undefined;
 }
 
 export interface PhaseAResult {
@@ -63,27 +88,31 @@ interface Constraint {
   describe(): string;
 }
 
-/** Binary damage relation: allowed (offensive SP, defensive SP) pairs for one hit. */
-class DamageConstraint implements Constraint {
+/**
+ * Generic binary relation over two SP variables: an allowed set of "a,b" pairs.
+ * Both the damage factor (offensive SP × defensive SP) and the speed factor
+ * (Spe SP × Spe SP) are this shape.
+ */
+class BinaryRelation implements Constraint {
   readonly vars: VarKey[];
   constructor(
-    private readonly offVar: VarKey,
-    private readonly defVar: VarKey,
+    private readonly aVar: VarKey,
+    private readonly bVar: VarKey,
     private readonly allowed: Set<string>,
     private readonly label: string,
   ) {
-    this.vars = [offVar, defVar];
+    this.vars = [aVar, bVar];
   }
 
   revise(target: VarKey, domains: Map<VarKey, Set<number>>): boolean {
     const dom = domains.get(target)!;
-    const isOff = target === this.offVar;
-    const otherDom = domains.get(isOff ? this.defVar : this.offVar)!;
+    const isA = target === this.aVar;
+    const otherDom = domains.get(isA ? this.bVar : this.aVar)!;
     let changed = false;
     for (const value of [...dom]) {
       let supported = false;
       for (const other of otherDom) {
-        const key = isOff ? `${value},${other}` : `${other},${value}`;
+        const key = isA ? `${value},${other}` : `${other},${value}`;
         if (this.allowed.has(key)) {
           supported = true;
           break;
@@ -133,6 +162,14 @@ class BudgetConstraint implements Constraint {
   }
 }
 
+/** Effective (modified) speed for a candidate Spe SP: floor(final Spe × control). */
+function effectiveSpeed(base: number, sp: number, role: ReturnType<typeof roleOf>, control?: SpeedControl): number {
+  const final = spToFinal(base, sp, role);
+  const num = control?.num ?? 1;
+  const den = control?.den ?? 1;
+  return Math.floor((final * num) / den);
+}
+
 /** Exact set of sums obtainable by choosing one value from each domain (capped at `cap`). */
 function reachableSums(domains: Set<number>[], cap: number): Set<number> {
   let current = new Set<number>([0]);
@@ -160,6 +197,7 @@ export class ConstraintSystem {
     gen: Gen,
     mons: SolverMon[],
     hits: SolverHit[],
+    speedFacts: SpeedFact[] = [],
     registry: ExceptionRegistry = championsExceptions,
   ) {
     const specs = new Map<string, MonSpec>();
@@ -191,11 +229,42 @@ export class ConstraintSystem {
       );
       const allowed = new Set(factor.feasible.map((p) => `${p.attackerSp},${p.defenderSp}`));
       this.addConstraint(
-        new DamageConstraint(
+        new BinaryRelation(
           vkey(hit.attackerId, factor.offensiveStat),
           vkey(hit.defenderId, factor.defensiveStat),
           allowed,
           `dmg:${hit.attackerId}->${hit.defenderId} ${hit.move}=${hit.observedDamage}`,
+        ),
+      );
+    }
+
+    for (const fact of speedFacts) {
+      // §4 guard: orderings across different priority brackets carry NO speed info.
+      if (!fact.samePriorityBracket) continue;
+      const first = specs.get(fact.firstId);
+      const second = specs.get(fact.secondId);
+      if (!first) throw new Error(`speed fact references unknown mon ${fact.firstId}`);
+      if (!second) throw new Error(`speed fact references unknown mon ${fact.secondId}`);
+      const fBase = baseStatOf(gen, first.species, 'spe');
+      const sBase = baseStatOf(gen, second.species, 'spe');
+      const fRole = roleOf(first.alignment, 'spe');
+      const sRole = roleOf(second.alignment, 'spe');
+      const allowed = new Set<string>();
+      for (let a = SP_MIN; a <= SP_MAX; a++) {
+        const effA = effectiveSpeed(fBase, a, fRole, fact.firstControl);
+        for (let b = SP_MIN; b <= SP_MAX; b++) {
+          const effB = effectiveSpeed(sBase, b, sRole, fact.secondControl);
+          // first acted before second: under Trick Room the slower acts first.
+          const ok = fact.tie ? effA === effB : fact.trickRoom ? effA <= effB : effA >= effB;
+          if (ok) allowed.add(`${a},${b}`);
+        }
+      }
+      this.addConstraint(
+        new BinaryRelation(
+          vkey(fact.firstId, 'spe'),
+          vkey(fact.secondId, 'spe'),
+          allowed,
+          `speed:${fact.firstId}<${fact.secondId}${fact.trickRoom ? '(TR)' : ''}${fact.tie ? '(tie)' : ''}`,
         ),
       );
     }

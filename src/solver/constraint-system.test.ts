@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { championsGen, predictHit, type MonSpec } from '../engine';
 import { maxHpToSpHp } from '../conversion';
-import { ConstraintSystem, NON_HP_STATS, type SolverMon } from './constraint-system';
+import { ConstraintSystem, NON_HP_STATS, type SolverMon, type SpeedFact } from './constraint-system';
 
 const gen = championsGen();
 const SLOW = 30_000;
@@ -100,6 +100,43 @@ describe('U4.3.2 / U4.3.3 — fused until separated', () => {
     },
     SLOW,
   );
+});
+
+describe('§4 speed factor — order within a bracket, with the priority guard', () => {
+  // Two Garchomps (base Spe 102, alignment up=spe → role 'up'). Y's Spe is known
+  // (restricted to SP 10 → final 145); X acted first, so X is constrained vs 145.
+  const X: SolverMon = { id: 'X', spec: garchomp, observedMaxHp: 183 }; // SP_hp 0
+  const Y: SolverMon = { id: 'Y', spec: garchomp, observedMaxHp: 183 };
+
+  const run = (fact: SpeedFact) => {
+    const system = new ConstraintSystem(gen, [X, Y], [], [fact]);
+    system.restrictDomain('Y', 'spe', [10]); // Y's Spe known
+    return system.propagate().domains.get('X')!.get('spe')!;
+  };
+
+  it('a same-bracket order prunes the faster mon to ≥ the known speed', () => {
+    const xSpe = run({ firstId: 'X', secondId: 'Y', samePriorityBracket: true });
+    expect(xSpe).toContain(10); // SP 10 → final 145 = boundary
+    expect(xSpe).not.toContain(9); // SP 9 → final 144 < 145, ruled out
+    expect(Math.min(...xSpe)).toBe(10);
+  });
+
+  it('U4.3.6 guard — a cross-bracket order contributes NO speed constraint', () => {
+    const xSpe = run({ firstId: 'X', secondId: 'Y', samePriorityBracket: false });
+    expect(xSpe).toHaveLength(33); // untouched: priority order carries no speed info
+    expect(xSpe).toContain(0);
+  });
+
+  it('Trick Room reverses the comparison (faster-acting mon is the slower one)', () => {
+    const xSpe = run({ firstId: 'X', secondId: 'Y', samePriorityBracket: true, trickRoom: true });
+    expect(xSpe).toContain(10);
+    expect(xSpe).not.toContain(11); // SP 11 → final 146 > 145, too fast to move first under TR
+  });
+
+  it('a speed tie pins the Spe to equality', () => {
+    const xSpe = run({ firstId: 'X', secondId: 'Y', samePriorityBracket: true, tie: true });
+    expect(xSpe).toEqual([10]); // only SP 10 yields final 145 == 145
+  });
 });
 
 describe('U4.3.8 — contradiction yields an empty set and a flag, never a force-fit', () => {
