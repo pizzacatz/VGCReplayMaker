@@ -19,6 +19,7 @@ import {
   moveMakesContact,
   moveMultiHit,
   moveRecoilDrain,
+  moveStatus,
   nextEventId,
   planTargets,
   protectionBlocking,
@@ -291,6 +292,15 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         const target = actor;
         builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: r.kind, target, source: r.source, hpBefore, hpAfter: aHp }));
         if (aHp === 0 && hpBefore > 0) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target })); // recoil/contact KO
+      }
+    }
+    // Auto-apply a GUARANTEED status (Toxic→tox, Will-O-Wisp→brn, …) so end-of-turn ticks derive.
+    const inflicts = moveStatus(move);
+    if (inflicts) {
+      for (const t of targets) {
+        const o = outcomes[t] ?? blankOutcome();
+        if (o.missed) continue; // blocked / missed → no status
+        builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'status_applied', target: t, status: inflicts }));
       }
     }
     emit(builders);

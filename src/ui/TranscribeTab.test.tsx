@@ -157,6 +157,25 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText(/⚑ You forfeited — game over/)).toBeTruthy(); // appears on the event timeline
   });
 
+  it('a guaranteed-status move (Toxic) applies the status, which then ticks at end of turn', () => {
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [entry('A', 0, 'Incineroar', ['Toxic'])], leads: ['A0'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [{ eventId: 't1', seq: 1, turn: 1, type: 'turn_start' }],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getAllByText, getByText } = render(<H />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Toxic'));
+    fireEvent.click(getByText('Log action'));
+    expect(getByText(/Garchomp → tox/)).toBeTruthy(); // status auto-applied
+    fireEvent.click(getByText('▶ End turn'));
+    expect(getByText(/\(Toxic\)/)).toBeTruthy(); // end-of-turn poison tick now derives
+  });
+
   it('the Faint button marks a Pokémon fainted', () => {
     const { getAllByText, getByText } = render(<Harness />);
     fireEvent.click(getAllByText('Incineroar').at(-1)!);

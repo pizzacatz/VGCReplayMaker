@@ -728,6 +728,15 @@ export function moveCanFlinch(move: string, attackerItem?: string, attackerAbili
   }
 }
 
+/** The status a move GUARANTEES on its target (Toxic→tox, Will-O-Wisp→brn, Thunder Wave→par, …), else undefined. Chance-based secondaries are intentionally excluded — the transcriber records those if they fire. */
+export function moveStatus(move: string): string | undefined {
+  try {
+    return (Dex.moves.get(move) as { status?: string }).status || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** A move's sub-hit range if it's multi-hit (Bullet Seed 2–5, Population Bomb 1–10, …), else null. */
 export function moveMultiHit(move: string): { min: number; max: number } | null {
   try {

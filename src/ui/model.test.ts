@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { MatchEvent, MatchLog } from '../log';
 import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
+import { broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, moveStatus, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -325,6 +325,17 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
       .map((bld, i) => bld(i + 1, 6))
       .filter((e) => e.type === 'passive_hp_change' && e.source === 'Infestation');
     expect(chip).toHaveLength(0); // turn 6 is outside the 4–5 turn window
+  });
+});
+
+describe('moveStatus — guaranteed status from a move', () => {
+  it('reads guaranteed statuses; ignores chance-based secondaries', () => {
+    expect(moveStatus('Toxic')).toBe('tox');
+    expect(moveStatus('Will-O-Wisp')).toBe('brn');
+    expect(moveStatus('Thunder Wave')).toBe('par');
+    expect(moveStatus('Spore')).toBe('slp');
+    expect(moveStatus('Flare Blitz')).toBeUndefined(); // burn is a 10% secondary
+    expect(moveStatus('Sludge Bomb')).toBeUndefined(); // 30% poison secondary
   });
 });
 
