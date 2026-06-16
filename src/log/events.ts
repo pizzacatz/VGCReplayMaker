@@ -138,6 +138,19 @@ export interface ForfeitEvent extends BaseEvent {
   side: Side;
 }
 
+/**
+ * A volatile status/effect starting or ending on a mon — Encore, Taunt,
+ * Substitute, Leech Seed, Disable, Confusion, etc. Maps to Showdown's
+ * |-start| / |-end|. `effect` is the Showdown effect string (e.g. "Encore",
+ * "move: Taunt", "Substitute").
+ */
+export interface VolatileEvent extends BaseEvent {
+  type: 'volatile';
+  mon: string;
+  effect: string;
+  action: 'start' | 'end';
+}
+
 export type MatchEvent =
   | TurnStartEvent
   | MoveUsedEvent
@@ -153,7 +166,8 @@ export type MatchEvent =
   | ItemOrAbilityEvent
   | MegaEvolutionEvent
   | RandomOutcomeEvent
-  | ForfeitEvent;
+  | ForfeitEvent
+  | VolatileEvent;
 
 /** Minimal mon sheet info replay needs (the full sheet lives in the roster/TeamInstance). */
 export interface LogMonSheet {

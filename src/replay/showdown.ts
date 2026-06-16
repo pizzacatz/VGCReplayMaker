@@ -29,7 +29,7 @@ function fromTag(source: string): string {
   return `[from] ${source}`;
 }
 const FIELD_CONDITIONS = new Set(['Electric Terrain', 'Grassy Terrain', 'Psychic Terrain', 'Misty Terrain', 'Trick Room', 'Gravity']);
-const SIDE_CONDITIONS = new Set(['Reflect', 'Light Screen', 'Aurora Veil', 'Tailwind', 'Safeguard', 'Mist']);
+const SIDE_CONDITIONS = new Set(['Reflect', 'Light Screen', 'Aurora Veil', 'Tailwind', 'Safeguard', 'Mist', 'Sticky Web', 'Stealth Rock', 'Spikes', 'Toxic Spikes']);
 
 const pside = (side: Side): string => (side === 'A' ? 'p1' : 'p2');
 const ab = (pos: number): string => (pos === 0 ? 'a' : 'b');
@@ -187,9 +187,14 @@ export function toShowdownLog(log: MatchLog): string {
           lines.push(`|-miss|${lastAttacker ? ident(lastAttacker) : ident(ev.mon)}|${ident(ev.mon)}`);
         } else if (ev.eventKind === 'flinch') {
           lines.push(`|cant|${ident(ev.mon)}|flinch`);
+        } else if (ev.eventKind === 'cant') {
+          lines.push(`|cant|${ident(ev.mon)}|${ev.outcome}`); // slp / par / frz
         }
         return;
       }
+      case 'volatile':
+        lines.push(`|${ev.action === 'start' ? '-start' : '-end'}|${ident(ev.mon)}|${ev.effect}`);
+        return;
     }
   }
 }

@@ -173,6 +173,24 @@ describe('toShowdownLog', () => {
     expect(out).toContain('|-weather|Sandstorm|[upkeep]'); // re-shown on turn 2
   });
 
+  it('renders volatiles (-start/-end), a hazard (-sidestart), and can’t-move (|cant|)', () => {
+    const out = toShowdownLog({
+      ...LOG,
+      events: [
+        { eventId: 'v1', seq: 1, turn: 1, type: 'volatile', mon: 'gar', effect: 'Encore', action: 'start' },
+        { eventId: 'v2', seq: 2, turn: 1, type: 'volatile', mon: 'inc', effect: 'move: Taunt', action: 'start' },
+        { eventId: 'v3', seq: 3, turn: 1, type: 'volatile', mon: 'gar', effect: 'Encore', action: 'end' },
+        { eventId: 'h', seq: 4, turn: 1, type: 'field_change', field: 'Sticky Web', action: 'set', side: 'B' },
+        { eventId: 'c', seq: 5, turn: 1, type: 'random_outcome', mon: 'inc', eventKind: 'cant', outcome: 'slp' },
+      ],
+    });
+    expect(out).toContain('|-start|p2a: Garchomp|Encore');
+    expect(out).toContain('|-start|p1a: Incineroar|move: Taunt');
+    expect(out).toContain('|-end|p2a: Garchomp|Encore');
+    expect(out).toContain('|-sidestart|p2: AgentUpig|move: Sticky Web');
+    expect(out).toContain('|cant|p1a: Incineroar|slp');
+  });
+
   it('renders a faint HP as "0 fnt"', () => {
     const koLog = toShowdownLog({ ...LOG, events: [{ eventId: 'd', seq: 1, turn: 1, type: 'damage', attacker: 'inc', move: 'Flare Blitz', defender: 'gar', hpBefore: 183, hpAfter: 0, crit: false, status: 'clean' }] });
     expect(koLog.includes('|-damage|p2a: Garchomp|0 fnt')).toBe(true);

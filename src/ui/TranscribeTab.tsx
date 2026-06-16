@@ -676,10 +676,12 @@ function describe(e: MatchEvent, label: (id: string) => string, sideName?: (s: '
     case 'field_change': return `${e.field} ${e.action}${e.side ? ` [${e.side}]` : ''}`;
     case 'item_or_ability_event': return `${label(e.mon)} ${e.kind} ${e.name}`;
     case 'mega_evolution': return `${label(e.mon)} Mega-Evolved → ${e.megaSpecies}`;
+    case 'volatile': return `${label(e.mon)} ${e.action === 'start' ? '→' : 'ended'} ${e.effect.replace(/^move: /, '')}`;
     case 'random_outcome':
       if (e.eventKind === 'flinch') return `${label(e.mon)} flinched`;
       if (e.eventKind === 'miss') return `${label(e.mon)} avoided the attack (missed)`;
       if (e.eventKind === 'blocked') return `${label(e.mon)} protected itself (${e.outcome})`;
+      if (e.eventKind === 'cant') return `${label(e.mon)} couldn’t move (${e.outcome})`;
       return `${label(e.mon)} ${e.eventKind}: ${e.outcome}`;
   }
 }

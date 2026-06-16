@@ -2,18 +2,32 @@ import { useState } from 'react';
 import type { MatchEvent } from '../log';
 import { allMons, currentBoard, nextEventId, type Workspace } from './model';
 
-type AdvType = 'status_applied' | 'status_cured' | 'stat_stage_change' | 'field_change' | 'heal' | 'passive_hp_change' | 'faint' | 'flinch' | 'paradox';
+type AdvType = 'status_applied' | 'status_cured' | 'stat_stage_change' | 'field_change' | 'heal' | 'passive_hp_change' | 'faint' | 'flinch' | 'paradox' | 'volatile' | 'cant';
 
 const LABELS: Array<[AdvType, string]> = [
   ['flinch', 'Flinch (reveals action order)'],
   ['stat_stage_change', 'Stat stage (boost/drop)'],
+  ['volatile', 'Volatile (Encore/Taunt/Substitute…)'],
+  ['cant', 'Couldn’t move (sleep/para/freeze)'],
   ['paradox', 'Paradox boost (Protosynthesis/Quark Drive)'],
-  ['field_change', 'Field (weather/terrain/screen)'],
+  ['field_change', 'Field / hazard (weather/terrain/screen/Sticky Web)'],
   ['status_applied', 'Status applied'],
   ['status_cured', 'Status cured'],
   ['heal', 'Heal'],
   ['passive_hp_change', 'Passive HP change'],
   ['faint', 'Faint'],
+];
+
+/** Common volatiles → their exact Showdown |-start|/|-end| effect string. */
+const VOLATILES: Array<[string, string]> = [
+  ['Encore', 'Encore'],
+  ['Taunt', 'move: Taunt'],
+  ['Substitute', 'Substitute'],
+  ['Leech Seed', 'move: Leech Seed'],
+  ['Disable', 'Disable'],
+  ['Confusion', 'confusion'],
+  ['Yawn', 'move: Yawn'],
+  ['Curse', 'Curse'],
 ];
 
 export function AdvancedEvents({ ws, setWs, currentTurn }: { ws: Workspace; setWs: (w: Workspace) => void; currentTurn: number }) {
@@ -29,6 +43,9 @@ export function AdvancedEvents({ ws, setWs, currentTurn }: { ws: Workspace; setW
   const [action, setAction] = useState<'set' | 'end'>('set');
   const [side, setSide] = useState<'' | 'A' | 'B'>('');
   const [hpAfter, setHpAfter] = useState('');
+  const [volEffect, setVolEffect] = useState(VOLATILES[0]![1]);
+  const [volAction, setVolAction] = useState<'start' | 'end'>('start');
+  const [cantReason, setCantReason] = useState('slp');
 
   const hpBefore = mon && board ? board.slots[Object.keys(board.slots).find((k) => board.slots[k]?.monId === mon) ?? '']?.hp ?? 0 : 0;
 
@@ -46,6 +63,8 @@ export function AdvancedEvents({ ws, setWs, currentTurn }: { ws: Workspace; setW
       case 'faint': if (mon) ev = { ...base, type, target: mon }; break;
       case 'flinch': if (mon) ev = { ...base, type: 'random_outcome', mon, eventKind: 'flinch', outcome: 'yes' }; break;
       case 'paradox': if (mon) ev = { ...base, type: 'item_or_ability_event', mon, kind: 'paradox', name: stat }; break; // boosts `stat` ×1.3 (×1.5 Spe)
+      case 'volatile': if (mon) ev = { ...base, type: 'volatile', mon, effect: volEffect, action: volAction }; break;
+      case 'cant': if (mon) ev = { ...base, type: 'random_outcome', mon, eventKind: 'cant', outcome: cantReason }; break;
     }
     if (ev) setWs({ ...ws, events: [...ws.events, ev] });
   };
@@ -79,6 +98,19 @@ export function AdvancedEvents({ ws, setWs, currentTurn }: { ws: Workspace; setW
       {(type === 'status_applied' || type === 'status_cured') && (
         <div className="field"><label>Status</label>
           <select value={statusName} onChange={(e) => setStatusName(e.target.value)}>{['brn', 'par', 'psn', 'tox', 'slp', 'frz'].map((s) => <option key={s}>{s}</option>)}</select>
+        </div>
+      )}
+      {type === 'volatile' && (
+        <>
+          <div className="field"><label>Effect</label>
+            <select value={volEffect} onChange={(e) => setVolEffect(e.target.value)}>{VOLATILES.map(([lbl, val]) => <option key={val} value={val}>{lbl}</option>)}</select>
+          </div>
+          <div className="field"><label>Action</label><select value={volAction} onChange={(e) => setVolAction(e.target.value as 'start' | 'end')}><option value="start">start</option><option value="end">end</option></select></div>
+        </>
+      )}
+      {type === 'cant' && (
+        <div className="field"><label>Reason</label>
+          <select value={cantReason} onChange={(e) => setCantReason(e.target.value)}>{['slp', 'par', 'frz', 'flinch'].map((r) => <option key={r}>{r}</option>)}</select>
         </div>
       )}
       {type === 'paradox' && (
