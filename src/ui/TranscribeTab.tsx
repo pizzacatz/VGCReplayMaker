@@ -26,6 +26,8 @@ import {
   moveStatChangeEvents,
   moveStatus,
   nextEventId,
+  oneHitSurvivor,
+  reactiveDefenderEvents,
   planTargets,
   protectionBlocking,
   slotOfMon,
@@ -300,20 +302,27 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
           builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: blocker ? 'blocked' : 'miss', outcome: blocker ?? 'yes' }));
           continue;
         }
-        const after = o.ko ? 0 : o.hpAfter === '' ? null : Number(o.hpAfter);
-        if (after === null) continue;
+        const rawAfter = o.ko ? 0 : o.hpAfter === '' ? null : Number(o.hpAfter);
+        if (rawAfter === null) continue;
         const slot = slotOfMon(board, t);
         const before = slot ? board.slots[slot]!.hp : 0;
+        const dMax = monMaxHp(ws, t);
+        const nHits = moveHits ? Number(o.hits) || moveHits.max : undefined;
+        // Focus Sash (item) / Sturdy (ability): survive a would-be KO from full HP at 1, single-hit only.
+        const survivor = oneHitSurvivor(ws, t, dMax > 0 && before === dMax, rawAfter === 0, !nHits || nHits <= 1);
+        const after = survivor ? 1 : rawAfter;
         const dmg = before - after;
         totalDamage += dmg;
         const eff = effOf(t)?.label ?? '1x'; // derived from the type chart, not entered
-        const nHits = moveHits ? Number(o.hits) || moveHits.max : undefined;
         builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit: o.crit, status: o.status, observedEffectiveness: eff, ...(nHits && nHits > 1 ? { hits: nHits } : {}) }));
+        if (survivor === 'Focus Sash') builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: t, kind: 'enditem', name: 'Focus Sash' }));
+        else if (survivor === 'Sturdy') builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: t, kind: 'activate', name: 'ability: Sturdy' }));
         if (after === 0) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target: t })); // auto-faint at 0 HP
         if (canFlinch && o.flinch) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'flinch', outcome: 'yes' }));
+        // Reactive defender items: Weakness Policy (SE), Cell Battery/Absorb Bulb/Snowball/Luminous Moss (by type), Air Balloon (pops).
+        builders.push(...reactiveDefenderEvents(ws, t, move, effOf(t)?.mult ?? 1, dmg, after > 0));
         // Sitrus Berry: heals the defender at ≤50% HP (alive) — only if it hasn't already been eaten.
-        const dMax = monMaxHp(ws, t);
-        if (!o.ko && after > 0 && dMax && monItem(ws, t) === 'Sitrus Berry' && after <= Math.floor(dMax / 2) && !itemConsumed(ws, t)) {
+        if (after > 0 && dMax && monItem(ws, t) === 'Sitrus Berry' && after <= Math.floor(dMax / 2) && !itemConsumed(ws, t)) {
           const healed = Math.min(dMax, after + Math.floor(dMax / 4));
           builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: t, kind: 'enditem', name: 'Sitrus Berry' }));
           builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'heal', target: t, source: 'Sitrus Berry', hpBefore: after, hpAfter: healed }));
@@ -600,6 +609,10 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                               </label>
                             )}
                             <label className="chip" style={{ color: o.ko ? 'var(--bad)' : undefined }}><input type="checkbox" checked={o.ko} onChange={(e) => setOutcome(t, { ko: e.target.checked })} /> KO</label>
+                            {o.ko && (() => {
+                              const s = oneHitSurvivor(ws, t, monMaxHp(ws, t) > 0 && before === monMaxHp(ws, t), true, !moveHits || (Number(o.hits) || moveHits.max) <= 1);
+                              return s ? <span className="chip" style={{ color: 'var(--accent)' }} title={`From full HP, ${s} lets it survive a single hit at 1 HP — it'll be logged as surviving, not fainting.`}>🛟 survives at 1 ({s})</span> : null;
+                            })()}
                             <label className="chip"><input type="checkbox" checked={o.crit} onChange={(e) => setOutcome(t, { crit: e.target.checked })} /> crit</label>
                             {canFlinch && <label className="chip"><input type="checkbox" checked={o.flinch} onChange={(e) => setOutcome(t, { flinch: e.target.checked })} /> flinched</label>}
                             <select value={o.status} onChange={(e) => setOutcome(t, { status: e.target.value as Cert })}>

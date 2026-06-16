@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { MatchEvent, MatchLog } from '../log';
 import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { backfillDerivedEvents, broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, fieldExpiryEvents, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, moveStatChangeEvents, moveStatus, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
+import { backfillDerivedEvents, broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, fieldExpiryEvents, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, moveStatChangeEvents, moveStatus, moveType, oneHitSurvivor, planTargets, protectionBlocking, reactiveDefenderEvents, typeEffectiveness, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -378,6 +378,55 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
     const { events, added } = backfillDerivedEvents(ws);
     expect(added).toBe(1); // game over → final turn's upkeep counts, Sun fades
     expect(events.some((e) => e.type === 'field_change' && e.action === 'end' && e.field === 'Sun')).toBe(true);
+  });
+
+  it('oneHitSurvivor: Focus Sash / Sturdy save from full HP on a single hit only', () => {
+    const make = (item?: string, ability?: string, consumed = false) => {
+      const mon = entry('A', 0, 'Garchomp');
+      if (item) mon.parsed.item = item;
+      if (ability) mon.parsed.ability = ability;
+      const ws: Workspace = {
+        sideA: { player: 'A', rawPaste: '', mons: [mon], leads: ['A0'] },
+        sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Incineroar')], leads: ['B0'] },
+        events: consumed ? [{ eventId: 'x', seq: 1, turn: 1, type: 'item_or_ability_event', mon: 'A0', kind: 'enditem', name: item ?? '' }] : [],
+      };
+      return ws;
+    };
+    expect(oneHitSurvivor(make('Focus Sash'), 'A0', true, true, true)).toBe('Focus Sash');
+    expect(oneHitSurvivor(make(undefined, 'Sturdy'), 'A0', true, true, true)).toBe('Sturdy');
+    expect(oneHitSurvivor(make('Focus Sash'), 'A0', false, true, true)).toBeNull(); // not full HP
+    expect(oneHitSurvivor(make('Focus Sash'), 'A0', true, false, true)).toBeNull(); // wouldn't faint anyway
+    expect(oneHitSurvivor(make('Focus Sash'), 'A0', true, true, false)).toBeNull(); // multi-hit breaks the Sash
+    expect(oneHitSurvivor(make('Focus Sash', undefined, true), 'A0', true, true, true)).toBeNull(); // already consumed
+  });
+
+  it('reactiveDefenderEvents: Weakness Policy (SE) and type-charge items boost + break; Air Balloon pops', () => {
+    const make = (item: string) => {
+      const mon = entry('A', 0, 'Garchomp');
+      mon.parsed.item = item;
+      return { sideA: { player: 'A', rawPaste: '', mons: [mon], leads: ['A0'] }, sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Incineroar')], leads: ['B0'] }, events: [] } as Workspace;
+    };
+    const evs = (ws: Workspace, move: string, mult: number) => reactiveDefenderEvents(ws, 'A0', move, mult, 40, true).map((b, i) => b(i + 1, 1));
+    // Weakness Policy: +2 Atk, +2 SpA, and breaks — only on a super-effective hit.
+    const wp = evs(make('Weakness Policy'), 'Ice Beam', 2);
+    expect(wp.filter((e) => e.type === 'stat_stage_change').map((e) => [(e as { stat: string }).stat, (e as { stages: number }).stages])).toEqual([['atk', 2], ['spa', 2]]);
+    expect(wp.some((e) => e.type === 'item_or_ability_event' && e.kind === 'enditem' && e.name === 'Weakness Policy')).toBe(true);
+    expect(evs(make('Weakness Policy'), 'Ice Beam', 1)).toHaveLength(0); // not super-effective → no trigger
+    // Cell Battery: +1 Atk on an Electric hit, and breaks.
+    const cb = evs(make('Cell Battery'), 'Thunderbolt', 2);
+    expect(cb.find((e) => e.type === 'stat_stage_change')).toMatchObject({ stat: 'atk', stages: 1 });
+    expect(evs(make('Cell Battery'), 'Flamethrower', 1)).toHaveLength(0); // wrong type
+    // Air Balloon just pops (enditem, no boost).
+    const ab = evs(make('Air Balloon'), 'Flamethrower', 1);
+    expect(ab).toHaveLength(1);
+    expect(ab[0]).toMatchObject({ type: 'item_or_ability_event', kind: 'enditem', name: 'Air Balloon' });
+    // No damage dealt → nothing fires.
+    expect(reactiveDefenderEvents(make('Weakness Policy'), 'A0', 'Ice Beam', 2, 0, true)).toHaveLength(0);
+  });
+
+  it('moveType reads the dex move type', () => {
+    expect(moveType('Thunderbolt')).toBe('Electric');
+    expect(moveType('Surf')).toBe('Water');
   });
 
   it('moveMakesContact reads the dex flag', () => {

@@ -214,6 +214,28 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText(/move failed/)).toBeTruthy();
   });
 
+  it('Focus Sash: a full-HP holder marked KO survives at 1 HP instead of fainting', () => {
+    const chomp = entry('B', 0, 'Garchomp');
+    chomp.parsed.item = 'Focus Sash';
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [entry('A', 0, 'Incineroar', ['Ice Punch'])], leads: ['A0'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [chomp], leads: ['B0'] },
+      events: [{ eventId: 't1', seq: 1, turn: 1, type: 'turn_start' }],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getAllByText, getByText, queryByText } = render(<H />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Ice Punch'));
+    fireEvent.click(getByText('KO')); // mark it as a KO from full HP
+    expect(getByText(/survives at 1/)).toBeTruthy(); // hint shows before logging
+    fireEvent.click(getByText('Log action'));
+    expect(queryByText(/Garchomp fainted/)).toBeNull(); // it did NOT faint
+    expect(getByText(/Focus Sash/)).toBeTruthy(); // the Sash was consumed
+  });
+
   it('a Sitrus Berry already eaten does not heal again', () => {
     const chomp = entry('B', 0, 'Garchomp');
     chomp.parsed.item = 'Sitrus Berry';

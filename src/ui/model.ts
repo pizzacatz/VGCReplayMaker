@@ -649,6 +649,57 @@ export function moveMakesContact(move: string): boolean {
     return false;
   }
 }
+export function moveType(move: string): string | undefined {
+  try {
+    return Dex.moves.get(move).type || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Type-charge items: when hit by a move of `type`, give +1 to `stat`, then break. */
+const TYPE_CHARGE_ITEMS: Record<string, { type: string; stat: string }> = {
+  'Cell Battery': { type: 'Electric', stat: 'atk' },
+  'Absorb Bulb': { type: 'Water', stat: 'spa' },
+  Snowball: { type: 'Ice', stat: 'atk' },
+  'Luminous Moss': { type: 'Water', stat: 'spd' },
+};
+
+/**
+ * Does a full-HP holder survive a would-be-lethal SINGLE hit at 1 HP? Focus Sash
+ * (item, one-time) and Sturdy (ability) both do, only from full HP and only on a
+ * single-hit move. Returns the survivor's name, or null.
+ */
+export function oneHitSurvivor(ws: Workspace, monId: string, atFullHp: boolean, wouldFaint: boolean, singleHit: boolean): 'Focus Sash' | 'Sturdy' | null {
+  if (!wouldFaint || !atFullHp || !singleHit) return null;
+  if (monItem(ws, monId) === 'Focus Sash' && !itemConsumed(ws, monId)) return 'Focus Sash';
+  if (monAbility(ws, monId) === 'Sturdy') return 'Sturdy';
+  return null;
+}
+
+/**
+ * Reactive defender items that fire on taking a damaging hit: Weakness Policy
+ * (super-effective → +2 Atk/+2 SpA), the type-charge items (Cell Battery/Absorb
+ * Bulb/Snowball/Luminous Moss → +1 to a stat), and Air Balloon (pops). All are
+ * one-time — consumed on trigger. Switch-forcing items (Eject Button/Red Card/
+ * Eject Pack) are intentionally NOT here: the replacement is a player choice, so
+ * they're left to manual entry. Returns builders; empty if nothing applies.
+ */
+export function reactiveDefenderEvents(ws: Workspace, defender: string, move: string, effMult: number, dmgDealt: number, aliveAfter: boolean): EventBuilder[] {
+  const out: EventBuilder[] = [];
+  if (dmgDealt <= 0 || !aliveAfter) return out;
+  const item = monItem(ws, defender);
+  if (!item || itemConsumed(ws, defender)) return out;
+  const enditem = () => out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: defender, kind: 'enditem', name: item }) as MatchEvent);
+  const boost = (stat: string, stages: number) => out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target: defender, stat, stages, source: item }) as MatchEvent);
+  if (item === 'Weakness Policy' && effMult > 1) { enditem(); boost('atk', 2); boost('spa', 2); }
+  else if (item === 'Air Balloon') enditem(); // pops on any damaging hit
+  else {
+    const tc = TYPE_CHARGE_ITEMS[item];
+    if (tc && moveType(move) === tc.type) { enditem(); boost(tc.stat, 1); }
+  }
+  return out;
+}
 function speciesTypes(species: string): string[] {
   try {
     return [...Dex.species.get(species).types];
