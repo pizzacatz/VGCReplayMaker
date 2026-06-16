@@ -8,7 +8,9 @@ import {
   endOfTurnEvents,
   entryEffectEvents,
   estimateDamage,
+  fieldExpiryEvents,
   forfeitFromEvents,
+  itemConsumed,
   megaFormeAbility,
   megaFormeFromItem,
   monAbility,
@@ -19,6 +21,7 @@ import {
   moveMakesContact,
   moveMultiHit,
   moveRecoilDrain,
+  moveStatChangeEvents,
   moveStatus,
   nextEventId,
   planTargets,
@@ -54,6 +57,10 @@ const END_OF_TURN_SOURCES = new Set(['Sandstorm', 'Leftovers', 'Black Sludge', '
 /** Moves that only work on the user's FIRST turn out — they fail otherwise. */
 const FIRST_TURN_MOVES = new Set(['Fake Out', 'First Impression', 'Mat Block']);
 
+/** Moves that only connect if the TARGET is using an attacking move this turn —
+ *  they fail against a target that switched in, used a status move, or already moved. */
+const NEEDS_TARGET_ATTACKING = new Set(['Sucker Punch', 'Thunderclap', 'Upper Hand']);
+
 export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspace) => void }) {
   const diagnosis = useMemo(() => diagnoseLog(ws), [ws]);
   const board = diagnosis.board;
@@ -62,6 +69,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   const [move, setMove] = useState<string | null>(null);
   const [targets, setTargets] = useState<string[]>([]);
   const [outcomes, setOutcomes] = useState<Record<string, TargetOutcome>>({});
+  const [manualFail, setManualFail] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const currentTurn = useMemo(() => {
@@ -118,6 +126,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     setMove(null);
     setTargets([]);
     setOutcomes({});
+    setManualFail(false);
   };
 
   const emit = (builders: Array<(seq: number, turn: number) => MatchEvent>) => {
@@ -156,6 +165,12 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         newEvents.push(ev);
         if (ev.type === 'faint') faintNow = true;
       }
+    }
+    // Timed-effect expiry (weather/terrain/Trick Room/screens/Tailwind) — self-idempotent,
+    // so it runs regardless of the residuals guard; once ended it leaves the board.
+    for (const b of fieldExpiryEvents(ws, board)) {
+      seq += 1;
+      newEvents.push(b(seq, currentTurn));
     }
     if (!faintNow) {
       const n = ws.events.filter((e) => e.type === 'turn_start').length + 1; // advance
@@ -197,6 +212,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
 
   const pickMove = (m: string) => {
     setMove(m);
+    setManualFail(false);
     const p = planTargets(m, actor!, board);
     const ts = p.spread ? p.candidates : p.candidates.slice(0, 1);
     setTargets(ts);
@@ -231,17 +247,37 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   const megaForme = actorBase ? megaFormeFromItem(actorItem, actorBase) : null;
   const canFlinch = move ? moveCanFlinch(move, actorItem, actorAbility) : false;
   const moveHits = move ? moveMultiHit(move) : null;
+  // Surface an auto-detected outright failure (no damage) so the user sees why "Log action" will fail.
+  const autoFailHint: string | null = (() => {
+    if (!actor || !move) return null;
+    const entryTurn = ws.events
+      .filter((e) => e.type === 'switch' && (e as Extract<MatchEvent, { type: 'switch' }>).in === actor)
+      .reduce((mx, e) => Math.max(mx, e.turn), 1);
+    if (FIRST_TURN_MOVES.has(move) && entryTurn !== currentTurn) return `${move} only works the turn this Pokémon switches in`;
+    const switchedIn = targets.some((t) => ws.events.some((e) => e.type === 'switch' && (e as Extract<MatchEvent, { type: 'switch' }>).in === t && e.turn === currentTurn));
+    if (NEEDS_TARGET_ATTACKING.has(move) && switchedIn) return `${move} fails — the target switched in, so it isn’t attacking`;
+    return null;
+  })();
 
   const confirmMove = () => {
     if (!actor || !move) return;
     const builders: Array<(seq: number, turn: number) => MatchEvent> = [
       (seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'move_used', user: actor, move, targets, isSpread: plan?.spread ?? false }),
     ];
-    // First-turn-only moves (Fake Out, First Impression, Mat Block) FAIL if the user didn't just enter.
+    // A move can FAIL outright (deals nothing) when a conditional requirement isn't met.
+    // Auto-detected cases + a manual override; any fail short-circuits the damage/status block.
     const entryTurn = ws.events
       .filter((e): e is Extract<MatchEvent, { type: 'switch' }> => e.type === 'switch' && e.in === actor)
       .reduce((mx, e) => Math.max(mx, e.turn), 1);
-    if (FIRST_TURN_MOVES.has(move) && entryTurn !== currentTurn) {
+    // Sucker Punch / Thunderclap / Upper Hand fail when the target isn't attacking — the clearest
+    // sign is a target that switched IN this turn (switching is not an attack).
+    const targetSwitchedInThisTurn = targets.some((t) =>
+      ws.events.some((e) => e.type === 'switch' && e.in === t && e.turn === currentTurn));
+    const failed =
+      manualFail ||
+      (FIRST_TURN_MOVES.has(move) && entryTurn !== currentTurn) ||
+      (NEEDS_TARGET_ATTACKING.has(move) && targetSwitchedInThisTurn);
+    if (failed) {
       const user = actor;
       builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: user, eventKind: 'fail', outcome: 'yes' }));
       emit(builders);
@@ -272,9 +308,9 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'damage', attacker: actor, move, defender: t, hpBefore: before, hpAfter: after, crit: o.crit, status: o.status, observedEffectiveness: eff, ...(nHits && nHits > 1 ? { hits: nHits } : {}) }));
         if (after === 0) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'faint', target: t })); // auto-faint at 0 HP
         if (canFlinch && o.flinch) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'flinch', outcome: 'yes' }));
-        // Sitrus Berry: heals the defender at ≤50% HP (alive)
+        // Sitrus Berry: heals the defender at ≤50% HP (alive) — only if it hasn't already been eaten.
         const dMax = monMaxHp(ws, t);
-        if (!o.ko && after > 0 && dMax && monItem(ws, t) === 'Sitrus Berry' && after <= Math.floor(dMax / 2)) {
+        if (!o.ko && after > 0 && dMax && monItem(ws, t) === 'Sitrus Berry' && after <= Math.floor(dMax / 2) && !itemConsumed(ws, t)) {
           const healed = Math.min(dMax, after + Math.floor(dMax / 4));
           builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: t, kind: 'enditem', name: 'Sitrus Berry' }));
           builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'heal', target: t, source: 'Sitrus Berry', hpBefore: after, hpAfter: healed }));
@@ -315,6 +351,17 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         if (o.missed) continue; // blocked / missed → no status
         builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'status_applied', target: t, status: inflicts }));
       }
+    }
+    // Stat-stage changes the move causes (Swords Dance, Parting Shot, Close Combat self-drop, Snarl, …).
+    // Self-boosts need the move to connect on ≥1 target (a fully-blocked damaging move drops nothing);
+    // foe drops apply only to targets actually hit (not missed/blocked/fainted).
+    const connected = !plan?.isDamaging || targets.some((t) => !(outcomes[t]?.missed));
+    if (connected) {
+      const statTargets = targets.filter((t) => {
+        const o = outcomes[t];
+        return !(plan?.isDamaging && (o?.missed || o?.ko));
+      });
+      builders.push(...moveStatChangeEvents(ws, board, actor, move, statTargets));
     }
     emit(builders);
     reset();
@@ -495,6 +542,11 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                   return (
                     <div className="panel" key={t} style={{ marginTop: 8 }}>
                       <strong>{monLabel(ws, t)}</strong>
+                      {monItem(ws, t) && itemConsumed(ws, t) && (
+                        <span className="chip" style={{ marginLeft: 8, color: 'var(--warn)' }} title="This Pokémon already used its held item — one-time items (Sitrus Berry, Focus Sash, herbs, …) won't trigger again.">
+                          🚫 {monItem(ws, t)} used
+                        </span>
+                      )}
                       {eff && (
                         <span className="chip" style={{ marginLeft: 8, color: eff.mult > 1 ? 'var(--good)' : eff.mult < 1 ? 'var(--warn)' : 'var(--muted)' }}>
                           {eff.text}
@@ -539,6 +591,12 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
                 <ReconstructedPanel attacker={actor} state={board} />
 
                 <div style={{ marginTop: 8 }}>
+                  {autoFailHint && <div className="muted" style={{ marginBottom: 4, color: 'var(--accent)' }}>⚠ {autoFailHint} — will log as failed.</div>}
+                  {!autoFailHint && (
+                    <label className="chip" style={{ marginRight: 8 }} title="The move fails outright (a conditional requirement wasn't met) — logs as failed, no damage or status.">
+                      <input type="checkbox" checked={manualFail} onChange={(e) => setManualFail(e.target.checked)} /> move failed
+                    </label>
+                  )}
                   <button className="primary" onClick={confirmMove}>Log action</button>
                 </div>
               </div>
@@ -702,8 +760,8 @@ function describe(e: MatchEvent, label: (id: string) => string, sideName?: (s: '
     case 'faint': return `${label(e.target)} fainted`;
     case 'status_applied': return `${label(e.target)} → ${e.status}`;
     case 'status_cured': return `${label(e.target)} cured ${e.status}`;
-    case 'stat_stage_change': return `${label(e.target)} ${e.stat} ${e.stages > 0 ? '+' : ''}${e.stages}`;
-    case 'field_change': return `${e.field} ${e.action}${e.side ? ` [${e.side}]` : ''}`;
+    case 'stat_stage_change': return `${label(e.target)} ${e.stat} ${e.stages > 0 ? '+' : ''}${e.stages}${e.source ? ` (${e.source})` : ''}`;
+    case 'field_change': return e.action === 'end' ? `${e.field} faded${e.side ? ` [${e.side}]` : ''}` : `${e.field} set${e.side ? ` [${e.side}]` : ''}${e.turnsKnown ? ` (${e.turnsKnown}t)` : ''}`;
     case 'item_or_ability_event': return `${label(e.mon)} ${e.kind} ${e.name}`;
     case 'mega_evolution': return `${label(e.mon)} Mega-Evolved → ${e.megaSpecies}`;
     case 'volatile': return `${label(e.mon)} ${e.action === 'start' ? '→' : 'ended'} ${e.effect.replace(/^move: /, '')}`;

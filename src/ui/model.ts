@@ -507,15 +507,137 @@ export function entryEffectEvents(ws: Workspace, monId: string, ability: string 
       else if (fa === 'Competitive') out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target, stat: 'spa', stages: 2, source: 'Competitive' }));
     }
   }
+  const setterItem = monItem(ws, monId);
   const weather = WEATHER_ABILITIES[ability];
-  if (weather) out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'field_change', field: weather, action: 'set' }));
+  if (weather) {
+    const ext = WEATHER_EXTENDER[setterItem ?? ''] === weather ? 8 : undefined; // Heat Rock/Damp Rock/… → 8 turns
+    out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'field_change', field: weather, action: 'set', ...(ext ? { turnsKnown: ext } : {}) }));
+  }
   const terrain = TERRAIN_ABILITIES[ability];
-  if (terrain) out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'field_change', field: terrain, action: 'set' }));
+  if (terrain) {
+    const ext = setterItem === 'Terrain Extender' ? 8 : undefined;
+    out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'field_change', field: terrain, action: 'set', ...(ext ? { turnsKnown: ext } : {}) }));
+  }
+  return out;
+}
+
+/** Abilities that block ALL stat drops inflicted by a foe. */
+const STAT_DROP_BLOCK_ALL = new Set(['Clear Body', 'White Smoke', 'Full Metal Body']);
+/** Abilities that block a drop to ONE specific stat. */
+const STAT_DROP_BLOCK_ONE: Record<string, string> = { 'Hyper Cutter': 'atk', 'Big Pecks': 'def', 'Keen Eye': 'accuracy', Illuminate: 'accuracy' };
+
+type Boosts = Partial<Record<string, number>>;
+
+/** Moves whose stat changes are engine-coded (onHit) and absent from static dex `boosts`. */
+const MOVE_BOOST_FALLBACK: Record<string, { selfBoosts?: Boosts; targetBoosts?: Boosts }> = {
+  'Parting Shot': { targetBoosts: { atk: -1, spa: -1 } }, // then the user switches out (logged separately)
+  'Belly Drum': { selfBoosts: { atk: 6 } }, // (also halves the user's HP — logged separately)
+  'Strength Sap': { targetBoosts: { atk: -1 } }, // (also heals the user — logged separately)
+};
+
+/**
+ * A move's deterministic stat-stage changes, read from dex data: primary `boosts`
+ * (Swords Dance, Parting Shot, Growl), self-effect `self.boosts` (Close Combat,
+ * Draco Meteor), and any 100%-chance secondary (Snarl, Power-Up Punch). Chance
+ * secondaries (<100%) are left to manual entry — they aren't guaranteed.
+ */
+function moveBoostData(move: string): { selfBoosts?: Boosts; targetBoosts?: Boosts } {
+  try {
+    const d = Dex.moves.get(move) as unknown as {
+      exists: boolean; target: string; boosts?: Boosts;
+      self?: { boosts?: Boosts };
+      secondary?: { chance?: number; boosts?: Boosts; self?: { boosts?: Boosts } } | null;
+      secondaries?: Array<{ chance?: number; boosts?: Boosts; self?: { boosts?: Boosts } }>;
+    };
+    const res: { selfBoosts?: Boosts; targetBoosts?: Boosts } = {};
+    const addSelf = (b?: Boosts) => { if (b) res.selfBoosts = { ...(res.selfBoosts ?? {}), ...b }; };
+    const addTarget = (b?: Boosts) => { if (b) res.targetBoosts = { ...(res.targetBoosts ?? {}), ...b }; };
+    if (d.exists) {
+      if (d.boosts) (d.target === 'self' ? addSelf : addTarget)(d.boosts);
+      addSelf(d.self?.boosts);
+      const secs = d.secondaries ?? (d.secondary ? [d.secondary] : []);
+      for (const s of secs) {
+        if (s?.chance !== 100) continue; // only guaranteed secondaries are deterministic
+        addTarget(s.boosts);
+        addSelf(s.self?.boosts);
+      }
+    }
+    // Engine-coded changes (Parting Shot, …) aren't in static data — fill from the fallback.
+    if (!res.selfBoosts && !res.targetBoosts) {
+      const fb = MOVE_BOOST_FALLBACK[move];
+      if (fb) return { ...fb };
+    }
+    return res;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Stat-stage changes a move causes — self-boosts (Swords Dance, Close Combat,
+ * Draco Meteor) and foe drops (Parting Shot, Snarl, Charm) — including the
+ * block/reverse abilities (Clear Body, Contrary) and the Defiant/Competitive
+ * retaliation when a foe lowers a stat. `targets` are the mons that actually got
+ * hit (missed/fainted ones are excluded by the caller). Dex-driven, no hardcoding.
+ */
+export function moveStatChangeEvents(ws: Workspace, board: ReplayState, actor: string, move: string, targets: string[]): EventBuilder[] {
+  const out: EventBuilder[] = [];
+  const { selfBoosts, targetBoosts } = moveBoostData(move);
+  const change = (target: string, stat: string, stages: number, source: string) =>
+    out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target, stat, stages, source }) as MatchEvent);
+
+  // Self stat changes — the user's own ability can invert them (Contrary).
+  if (selfBoosts) {
+    const contrary = monAbility(ws, actor) === 'Contrary';
+    for (const [stat, raw] of Object.entries(selfBoosts)) {
+      const stages = contrary ? -(raw ?? 0) : raw ?? 0;
+      if (stages) change(actor, stat, stages, move);
+    }
+  }
+
+  // Foe-targeted stat changes — block abilities, Contrary, and Defiant/Competitive reactions apply.
+  if (targetBoosts) {
+    const actorSide = rosterSideOf(ws, actor);
+    for (const t of targets) {
+      const ab = monAbility(ws, t);
+      const item = monItem(ws, t);
+      const isFoe = rosterSideOf(ws, t) !== actorSide;
+      const contrary = ab === 'Contrary';
+      let droppedByFoe = false;
+      for (const [stat, raw] of Object.entries(targetBoosts)) {
+        const stages = contrary ? -(raw ?? 0) : raw ?? 0;
+        if (!stages) continue;
+        const isDrop = stages < 0;
+        if (isDrop && isFoe) {
+          if (item === 'Clear Amulet') continue; // item blocks all foe-induced drops
+          if (ab && STAT_DROP_BLOCK_ALL.has(ab)) continue;
+          if (ab && STAT_DROP_BLOCK_ONE[ab] === stat) continue;
+          droppedByFoe = true;
+        }
+        change(t, stat, stages, move);
+      }
+      // A stat lowered by an opponent triggers a one-time retaliation boost.
+      if (droppedByFoe) {
+        if (ab === 'Defiant') change(t, 'atk', 2, 'Defiant');
+        else if (ab === 'Competitive') change(t, 'spa', 2, 'Competitive');
+      }
+    }
+  }
   return out;
 }
 
 export function monItem(ws: Workspace, monId: string): string | undefined {
   return allMons(ws).find((m) => m.monId === monId)?.parsed.item;
+}
+
+/**
+ * Has a mon already used up its held item? One-time items (berries, Gems, Focus
+ * Sash, herbs, Booster Energy, …) are consumed once — logged as an `enditem` for
+ * that mon. Used to stop auto-derived item effects (e.g. the Sitrus Berry heal)
+ * from re-firing every time the mon dips low again.
+ */
+export function itemConsumed(ws: Workspace, monId: string): boolean {
+  return ws.events.some((e) => e.type === 'item_or_ability_event' && e.mon === monId && e.kind === 'enditem');
 }
 export function monMaxHp(ws: Workspace, monId: string): number {
   return allMons(ws).find((m) => m.monId === monId)?.observedMaxHp ?? 0;
@@ -641,6 +763,61 @@ export function endOfTurnEvents(ws: Workspace, board: ReplayState): EventBuilder
       if (item === 'Flame Orb') out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'status_applied', target: monId, status: 'brn', source: 'Flame Orb' }));
       else if (item === 'Toxic Orb') out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'status_applied', target: monId, status: 'tox', source: 'Toxic Orb' }));
     }
+  }
+  return out;
+}
+
+/** Side conditions that never time out (entry hazards persist until removed). */
+const PERMANENT_SIDE_CONDITIONS = new Set(['Stealth Rock', 'Spikes', 'Toxic Spikes', 'Sticky Web']);
+/** Items that extend a weather/terrain from 5 → 8 turns (held by the SETTER). */
+const WEATHER_EXTENDER: Record<string, string> = { 'Heat Rock': 'Sun', 'Damp Rock': 'Rain', 'Smooth Rock': 'Sand', 'Icy Rock': 'Snow' };
+
+/** Total turns an effect stays up (incl. the turn it was set). `turnsKnown` overrides (e.g. rock/clay → 8). */
+function fieldDuration(field: string, turnsKnown?: number): number {
+  if (turnsKnown && turnsKnown > 0) return turnsKnown;
+  if (field === 'Tailwind') return 4; // Tailwind is 4 turns; everything else defaults to 5
+  return 5;
+}
+
+/**
+ * End-of-turn expiry for timed field effects (weather, terrain, Trick Room,
+ * Gravity, screens, Tailwind, …). Emits a `field_change action:'end'` for any
+ * active condition whose duration has elapsed THIS turn — so the replay shows
+ * "The sunlight faded." automatically. Self-idempotent: once the end event is in
+ * the log the condition leaves the board, so a re-run derives nothing. Entry
+ * hazards are permanent and never expire here.
+ */
+export function fieldExpiryEvents(ws: Workspace, board: ReplayState): EventBuilder[] {
+  const out: EventBuilder[] = [];
+  const curTurn = ws.events.reduce((mx, e) => Math.max(mx, e.turn), 0);
+  if (curTurn < 1) return out;
+
+  // The latest still-active `set` for a field (cleared if a later `end` intervened). Side-scoped for side conditions.
+  const latestSet = (field: string, side?: Side): Extract<MatchEvent, { type: 'field_change' }> | null => {
+    let setEv: Extract<MatchEvent, { type: 'field_change' }> | null = null;
+    for (const e of [...ws.events].sort((a, b) => a.seq - b.seq)) {
+      if (e.type !== 'field_change' || e.field !== field) continue;
+      const evSide = e.side;
+      if (side === undefined ? evSide !== undefined : evSide !== side) continue;
+      setEv = e.action === 'set' ? e : null;
+    }
+    return setEv;
+  };
+
+  const expire = (field: string, side?: Side) => {
+    const setEv = latestSet(field, side);
+    if (!setEv) return;
+    const dur = fieldDuration(field, setEv.turnsKnown);
+    if (curTurn - setEv.turn + 1 >= dur) {
+      out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'field_change', field, action: 'end', ...(side ? { side } : {}) }) as MatchEvent);
+    }
+  };
+
+  if (board.weather) expire(board.weather);
+  for (const f of board.field) expire(f);
+  for (const side of ['A', 'B'] as Side[]) for (const c of board.sides[side]) {
+    if (PERMANENT_SIDE_CONDITIONS.has(c)) continue;
+    expire(c, side);
   }
   return out;
 }

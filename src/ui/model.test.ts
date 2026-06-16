@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { MatchEvent, MatchLog } from '../log';
 import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, moveStatus, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
+import { broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, fieldExpiryEvents, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, moveStatChangeEvents, moveStatus, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -179,6 +179,112 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
     expect(make('Clear Body')).toHaveLength(0); // drop blocked
     expect(make('Inner Focus')).toHaveLength(0); // immune
     expect(make(undefined).map((e) => e.stages)).toEqual([-1]); // plain Intimidate
+  });
+
+  it('fieldExpiryEvents: weather fades after 5 turns (8 with the rock); Tailwind after 4', () => {
+    const make = (events: MatchEvent[]) => {
+      const ws: Workspace = {
+        sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+        sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+        events,
+      };
+      const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+      return fieldExpiryEvents(ws, b).map((bld, i) => bld(i + 1, 1));
+    };
+    const turns = (n: number) => Array.from({ length: n }, (_, i) => ({ eventId: `t${i + 1}`, seq: i + 1, turn: i + 1, type: 'turn_start' } as MatchEvent));
+    // Sun set on turn 1, now turn 4 → still up; turn 5 → fades.
+    const sunSet: MatchEvent = { eventId: 'w', seq: 0, turn: 1, type: 'field_change', field: 'Sun', action: 'set' };
+    expect(make([sunSet, ...turns(4)])).toHaveLength(0);
+    const faded = make([sunSet, ...turns(5)]);
+    expect(faded).toHaveLength(1);
+    expect(faded[0]).toMatchObject({ type: 'field_change', field: 'Sun', action: 'end' });
+    // Rock-extended Sun lasts 8 turns.
+    const sunRock: MatchEvent = { ...sunSet, turnsKnown: 8 };
+    expect(make([sunRock, ...turns(5)])).toHaveLength(0);
+    expect(make([sunRock, ...turns(8)])).toHaveLength(1);
+    // Tailwind (side condition) is 4 turns.
+    const tw: MatchEvent = { eventId: 'tw', seq: 0, turn: 1, type: 'field_change', field: 'Tailwind', action: 'set', side: 'A' };
+    expect(make([tw, ...turns(3)])).toHaveLength(0);
+    const twEnd = make([tw, ...turns(4)]);
+    expect(twEnd).toHaveLength(1);
+    expect(twEnd[0]).toMatchObject({ type: 'field_change', field: 'Tailwind', action: 'end', side: 'A' });
+  });
+
+  it('fieldExpiryEvents: entry hazards never expire; a re-set restarts the clock', () => {
+    const make = (events: MatchEvent[]) => {
+      const ws: Workspace = {
+        sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+        sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+        events,
+      };
+      const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+      return fieldExpiryEvents(ws, b).map((bld, i) => bld(i + 1, 1));
+    };
+    const turns = (n: number) => Array.from({ length: n }, (_, i) => ({ eventId: `t${i + 1}`, seq: i + 1, turn: i + 1, type: 'turn_start' } as MatchEvent));
+    // Stealth Rock is permanent — never auto-expires even far past 5 turns.
+    const sr: MatchEvent = { eventId: 'sr', seq: 0, turn: 1, type: 'field_change', field: 'Stealth Rock', action: 'set', side: 'B' };
+    expect(make([sr, ...turns(9)])).toHaveLength(0);
+    // Re-setting Trick Room on turn 4 means it shouldn't expire at turn 5 (clock restarts from 4).
+    const tr1: MatchEvent = { eventId: 'tr1', seq: 0, turn: 1, type: 'field_change', field: 'Trick Room', action: 'set' };
+    const trEnd: MatchEvent = { eventId: 'tre', seq: 10, turn: 5, type: 'field_change', field: 'Trick Room', action: 'end' };
+    const tr2: MatchEvent = { eventId: 'tr2', seq: 11, turn: 5, type: 'field_change', field: 'Trick Room', action: 'set' };
+    expect(make([tr1, ...turns(5), trEnd, tr2])).toHaveLength(0); // freshly re-set this turn → still up
+  });
+
+  it('moveStatChangeEvents: Parting Shot drops the foe Atk/SpA; Defiant retaliates; Clear Body blocks', () => {
+    const make = (targetAbility?: string, targetItem?: string) => {
+      const kg = entry('B', 0, 'Kingambit');
+      if (targetAbility) kg.parsed.ability = targetAbility;
+      if (targetItem) kg.parsed.item = targetItem;
+      const ws: Workspace = {
+        sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+        sideB: { player: 'B', rawPaste: '', mons: [kg], leads: ['B0'] },
+        events: [],
+      };
+      const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+      return moveStatChangeEvents(ws, b, 'A0', 'Parting Shot', ['B0'])
+        .map((bld, i) => bld(i + 1, 1))
+        .filter((e): e is Extract<MatchEvent, { type: 'stat_stage_change' }> => e.type === 'stat_stage_change');
+    };
+    expect(make().map((e) => [e.target, e.stat, e.stages])).toEqual([['B0', 'atk', -1], ['B0', 'spa', -1]]);
+    // Defiant retaliates once (+2 Atk) after the foe-induced drop.
+    expect(make('Defiant').map((e) => [e.stat, e.stages, e.source])).toContainEqual(['atk', 2, 'Defiant']);
+    // Competitive retaliates with +2 SpA.
+    expect(make('Competitive').some((e) => e.stat === 'spa' && e.stages === 2 && e.source === 'Competitive')).toBe(true);
+    // Clear Body / Clear Amulet block the drops entirely (and so no retaliation).
+    expect(make('Clear Body')).toHaveLength(0);
+    expect(make(undefined, 'Clear Amulet')).toHaveLength(0);
+  });
+
+  it('moveStatChangeEvents: self-boosts — Swords Dance +2 Atk on the user, Contrary inverts', () => {
+    const make = (ability?: string) => {
+      const mon = entry('A', 0, 'Incineroar');
+      if (ability) mon.parsed.ability = ability;
+      const ws: Workspace = {
+        sideA: { player: 'A', rawPaste: '', mons: [mon], leads: ['A0'] },
+        sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+        events: [],
+      };
+      const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+      return moveStatChangeEvents(ws, b, 'A0', 'Swords Dance', [])
+        .map((bld, i) => bld(i + 1, 1))
+        .filter((e): e is Extract<MatchEvent, { type: 'stat_stage_change' }> => e.type === 'stat_stage_change');
+    };
+    expect(make().map((e) => [e.target, e.stat, e.stages])).toEqual([['A0', 'atk', 2]]);
+    expect(make('Contrary').map((e) => [e.target, e.stat, e.stages])).toEqual([['A0', 'atk', -2]]); // Contrary flips it
+  });
+
+  it('moveStatChangeEvents: a damaging self-drop move (Close Combat) lowers the user Def/SpD', () => {
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [],
+    };
+    const b = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const ev = moveStatChangeEvents(ws, b, 'A0', 'Close Combat', ['B0'])
+      .map((bld, i) => bld(i + 1, 1))
+      .filter((e): e is Extract<MatchEvent, { type: 'stat_stage_change' }> => e.type === 'stat_stage_change');
+    expect(ev.map((e) => [e.target, e.stat, e.stages]).sort()).toEqual([['A0', 'def', -1], ['A0', 'spd', -1]]);
   });
 
   it('moveMakesContact reads the dex flag', () => {

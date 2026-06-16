@@ -41,6 +41,7 @@ export function AdvancedEvents({ ws, setWs, currentTurn }: { ws: Workspace; setW
   const [source, setSource] = useState('');
   const [field, setField] = useState('Sun');
   const [action, setAction] = useState<'set' | 'end'>('set');
+  const [turns, setTurns] = useState('');
   const [side, setSide] = useState<'' | 'A' | 'B'>('');
   const [hpAfter, setHpAfter] = useState('');
   const [volEffect, setVolEffect] = useState(VOLATILES[0]![1]);
@@ -57,7 +58,7 @@ export function AdvancedEvents({ ws, setWs, currentTurn }: { ws: Workspace; setW
       case 'status_applied': if (mon) ev = { ...base, type, target: mon, status: statusName }; break;
       case 'status_cured': if (mon) ev = { ...base, type, target: mon, status: statusName }; break;
       case 'stat_stage_change': if (mon) ev = { ...base, type, target: mon, stat, stages, source }; break;
-      case 'field_change': ev = { ...base, type, field, action, ...(side ? { side } : {}) }; break;
+      case 'field_change': ev = { ...base, type, field, action, ...(side ? { side } : {}), ...(action === 'set' && Number(turns) > 0 ? { turnsKnown: Number(turns) } : {}) }; break;
       case 'heal': if (mon) ev = { ...base, type, target: mon, source, hpBefore, hpAfter: Number(hpAfter) }; break;
       case 'passive_hp_change': if (mon) ev = { ...base, type, target: mon, source, hpBefore, hpAfter: Number(hpAfter) }; break;
       case 'faint': if (mon) ev = { ...base, type, target: mon }; break;
@@ -90,6 +91,7 @@ export function AdvancedEvents({ ws, setWs, currentTurn }: { ws: Workspace; setW
           <div className="field"><label>Field</label><input value={field} onChange={(e) => setField(e.target.value)} placeholder="Sun / Grassy Terrain / Light Screen / Trick Room / Tailwind" /></div>
           <div className="field"><label>Action</label><select value={action} onChange={(e) => setAction(e.target.value as 'set' | 'end')}><option>set</option><option>end</option></select></div>
           <div className="field"><label>Side</label><select value={side} onChange={(e) => setSide(e.target.value as '' | 'A' | 'B')}><option value="">field-wide</option><option value="A">A (you)</option><option value="B">B (opp)</option></select></div>
+          {action === 'set' && <div className="field"><label>Turns</label><input type="number" value={turns} onChange={(e) => setTurns(e.target.value)} placeholder="auto (5; 8 w/ rock/clay)" style={{ width: 130 }} /></div>}
         </>
       ) : (
         <div className="field"><label>Mon</label>{monSelect}</div>

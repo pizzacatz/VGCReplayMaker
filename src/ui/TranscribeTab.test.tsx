@@ -193,6 +193,51 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText(/move failed/)).toBeTruthy();
   });
 
+  it('Sucker Punch auto-fails when the target switched in this turn', () => {
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [entry('A', 0, 'Kingambit', ['Sucker Punch'])], leads: ['A0'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [entry('B', 0, 'Garchomp'), entry('B', 1, 'Toxapex')], leads: ['B0'] },
+      events: [
+        { eventId: 't1', seq: 1, turn: 1, type: 'turn_start' },
+        // Opp pivots Garchomp out for Toxapex this turn → Toxapex isn't attacking.
+        { eventId: 's', seq: 2, turn: 1, type: 'switch', side: 'B', position: 0, out: 'B0', in: 'B1' },
+      ],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getAllByText, getByText } = render(<H />);
+    fireEvent.click(getAllByText('Kingambit').at(-1)!);
+    fireEvent.click(getByText('Sucker Punch'));
+    fireEvent.click(getByText('Log action'));
+    expect(getByText(/move failed/)).toBeTruthy();
+  });
+
+  it('a Sitrus Berry already eaten does not heal again', () => {
+    const chomp = entry('B', 0, 'Garchomp');
+    chomp.parsed.item = 'Sitrus Berry';
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [entry('A', 0, 'Incineroar', ['Flare Blitz'])], leads: ['A0'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [chomp], leads: ['B0'] },
+      events: [
+        { eventId: 't1', seq: 1, turn: 1, type: 'turn_start' },
+        // Garchomp ate its Sitrus earlier in the game.
+        { eventId: 'eat', seq: 2, turn: 1, type: 'item_or_ability_event', mon: 'B0', kind: 'enditem', name: 'Sitrus Berry' },
+      ],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getAllByText, getByText, getByPlaceholderText, queryByText } = render(<H />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Flare Blitz'));
+    fireEvent.change(getByPlaceholderText('hp after'), { target: { value: '70' } }); // ≤50% of 175
+    fireEvent.click(getByText('Log action'));
+    expect(queryByText(/\(Sitrus Berry\)/)).toBeNull(); // no second Sitrus heal in the timeline
+  });
+
   it('Regenerator heals 1/3 when the mon switches out', () => {
     const tox = entry('A', 0, 'Toxapex');
     tox.parsed.ability = 'Regenerator';
