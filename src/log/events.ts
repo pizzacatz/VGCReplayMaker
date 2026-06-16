@@ -162,6 +162,10 @@ export interface LogMonSheet {
   nickname?: string;
   /** max HP (observed or read) — for current/max HP display */
   maxHp: number;
+  /** for replay fidelity: gender (sprite), held item (Mega stone, [from] tags), ability (-ability lines) */
+  gender?: 'M' | 'F';
+  item?: string;
+  ability?: string;
 }
 
 export interface LeadEntry {

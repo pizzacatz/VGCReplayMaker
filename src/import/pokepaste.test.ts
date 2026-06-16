@@ -98,3 +98,11 @@ describe('multi-mon paste', () => {
     expect(result.mons.every((m) => m.species === 'Incineroar')).toBe(true);
   });
 });
+
+describe('gender marker is captured (for replay sprites/details)', () => {
+  it('reads (M)/(F) on the species line, with or without a nickname', () => {
+    expect(parsePokepaste('Incineroar (F) @ Sitrus Berry\nAbility: Intimidate\n- Fake Out').mons[0]!).toMatchObject({ species: 'Incineroar', gender: 'F', item: 'Sitrus Berry' });
+    expect(parsePokepaste('Spicy (Garchomp) (M) @ Life Orb\nAbility: Rough Skin\n- Earthquake').mons[0]!).toMatchObject({ species: 'Garchomp', nickname: 'Spicy', gender: 'M', item: 'Life Orb' });
+    expect(parsePokepaste('Garchomp\nAbility: Rough Skin\n- Earthquake').mons[0]!.gender).toBeUndefined();
+  });
+});

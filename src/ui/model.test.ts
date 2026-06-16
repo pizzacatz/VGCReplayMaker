@@ -146,9 +146,11 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
     };
     const board = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
     const intim = entryEffectEvents(ws, 'A0', 'Intimidate', board, true).map((b, i) => b(i + 1, 1));
-    expect(intim).toHaveLength(2); // both foes
-    expect(intim.every((e) => e.type === 'stat_stage_change' && e.stat === 'atk' && e.stages === -1)).toBe(true);
-    expect(intim.map((e) => (e.type === 'stat_stage_change' ? e.target : '')).sort()).toEqual(['B0', 'B1']);
+    expect(intim.some((e) => e.type === 'item_or_ability_event' && e.mon === 'A0' && e.name === 'Intimidate')).toBe(true); // ability announced
+    const drops = intim.filter((e): e is Extract<MatchEvent, { type: 'stat_stage_change' }> => e.type === 'stat_stage_change');
+    expect(drops).toHaveLength(2); // both foes
+    expect(drops.every((e) => e.stat === 'atk' && e.stages === -1)).toBe(true);
+    expect(drops.map((e) => e.target).sort()).toEqual(['B0', 'B1']);
 
     const sun = entryEffectEvents(ws, 'A0', 'Drought', board, false).map((b, i) => b(i + 1, 1));
     expect(sun).toHaveLength(1);

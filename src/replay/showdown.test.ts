@@ -137,6 +137,42 @@ describe('toShowdownLog', () => {
     expect(out).not.toContain('paradox');
   });
 
+  it('threads gender, mega stone, Intimidate -ability, and status [from]', () => {
+    const rich: MatchLog = {
+      matchId: 'r', format: '[Gen 9 Champions] Reg M-A',
+      sideA: { player: 'W', mons: [
+        { monId: 'inc', species: 'Incineroar', maxHp: 202, gender: 'F', ability: 'Intimidate' },
+        { monId: 'aero', species: 'Aerodactyl', maxHp: 157, gender: 'M', item: 'Aerodactylite' },
+      ] },
+      sideB: { player: 'O', mons: [{ monId: 'gar', species: 'Garchomp', maxHp: 183, gender: 'M' }] },
+      leads: [{ side: 'A', position: 0, monId: 'inc' }, { side: 'A', position: 1, monId: 'aero' }, { side: 'B', position: 0, monId: 'gar' }],
+      events: [
+        { eventId: 'ab', seq: 1, turn: 1, type: 'item_or_ability_event', mon: 'inc', kind: 'ability', name: 'Intimidate' },
+        { eventId: 'dr', seq: 2, turn: 1, type: 'stat_stage_change', target: 'gar', stat: 'atk', stages: -1, source: 'Intimidate' },
+        { eventId: 'me', seq: 3, turn: 1, type: 'mega_evolution', mon: 'aero', megaSpecies: 'Aerodactyl-Mega' },
+        { eventId: 'st', seq: 4, turn: 1, type: 'status_applied', target: 'gar', status: 'brn', source: 'Will-O-Wisp' },
+      ],
+    };
+    const out = toShowdownLog(rich);
+    expect(out).toContain('|switch|p1a: Incineroar|Incineroar, L50, F|202/202'); // gender in details
+    expect(out).toContain('|-ability|p1a: Incineroar|Intimidate|boost'); // ability announced on the holder
+    expect(out).toContain('|detailschange|p1b: Aerodactyl|Aerodactyl-Mega, L50, M');
+    expect(out).toContain('|-mega|p1b: Aerodactyl|Aerodactyl|Aerodactylite'); // base species + the stone
+    expect(out).toContain('|-status|p2a: Garchomp|brn|[from] move: Will-O-Wisp');
+  });
+
+  it('re-shows weather each turn with |-weather| … |[upkeep]', () => {
+    const out = toShowdownLog({
+      ...LOG,
+      events: [
+        { eventId: 'w', seq: 1, turn: 1, type: 'field_change', field: 'Sand', action: 'set' },
+        { eventId: 't2', seq: 2, turn: 2, type: 'turn_start' },
+      ],
+    });
+    expect(out).toContain('|-weather|Sandstorm\n'); // initial set
+    expect(out).toContain('|-weather|Sandstorm|[upkeep]'); // re-shown on turn 2
+  });
+
   it('renders a faint HP as "0 fnt"', () => {
     const koLog = toShowdownLog({ ...LOG, events: [{ eventId: 'd', seq: 1, turn: 1, type: 'damage', attacker: 'inc', move: 'Flare Blitz', defender: 'gar', hpBefore: 183, hpAfter: 0, crit: false, status: 'clean' }] });
     expect(koLog.includes('|-damage|p2a: Garchomp|0 fnt')).toBe(true);

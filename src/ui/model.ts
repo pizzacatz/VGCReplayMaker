@@ -119,7 +119,15 @@ export function forfeitFromEvents(events: MatchEvent[]): { winner: SideId; reaso
 }
 
 export function buildLog(ws: Workspace): MatchLog {
-  const sheet = (m: MonEntry) => ({ monId: m.monId, species: m.parsed.species, maxHp: m.observedMaxHp, ...(m.parsed.nickname ? { nickname: m.parsed.nickname } : {}) });
+  const sheet = (m: MonEntry) => ({
+    monId: m.monId,
+    species: m.parsed.species,
+    maxHp: m.observedMaxHp,
+    ...(m.parsed.nickname ? { nickname: m.parsed.nickname } : {}),
+    ...(m.parsed.gender ? { gender: m.parsed.gender } : {}),
+    ...(m.parsed.item ? { item: m.parsed.item } : {}),
+    ...(m.parsed.ability ? { ability: m.parsed.ability } : {}),
+  });
   const slotLeads = (side: SideState, sideId: SideId) =>
     leadSlots(side)
       .map((monId, i) => (monId ? { side: sideId, position: i as Position, monId } : null))
@@ -481,7 +489,10 @@ export function entryEffectEvents(ws: Workspace, monId: string, ability: string 
   if (!ability) return out;
   if (includeIntimidate && ability === 'Intimidate') {
     const side = rosterSideOf(ws, monId);
-    for (const foe of activeMonIds(board).filter((m) => m.side !== side && !m.fainted)) {
+    const foes = activeMonIds(board).filter((m) => m.side !== side && !m.fainted);
+    // announce the ability on the holder (replay shows "X's Intimidate!") before the drops
+    if (foes.length) out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: monId, kind: 'ability', name: 'Intimidate' }));
+    for (const foe of foes) {
       const target = foe.monId;
       const fa = monAbility(ws, target);
       if (fa && INTIMIDATE_IMMUNE.has(fa)) continue; // Inner Focus / Oblivious / Own Tempo / Scrappy → no effect

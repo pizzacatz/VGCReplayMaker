@@ -20,6 +20,7 @@ export interface ParsedMon {
   nickname?: string;
   item?: string;
   ability?: string;
+  gender?: 'M' | 'F';
   level: number;
   moves: string[];
   alignment: MonAlignment;
@@ -67,6 +68,7 @@ function parseBlock(block: string, gen: Gen): ParsedMon {
     spreadKnown: false,
     flags,
     ...(head.nickname ? { nickname: head.nickname } : {}),
+    ...(head.gender ? { gender: head.gender } : {}),
   };
   if (head.item) {
     if (!gen.items.get(toID(head.item))) throw new Error(`unknown item: "${head.item}" (on ${head.species})`);
@@ -132,7 +134,7 @@ function parseBlock(block: string, gen: Gen): ParsedMon {
   return mon;
 }
 
-function parseSpeciesLine(line: string): { species: string; item?: string; nickname?: string } {
+function parseSpeciesLine(line: string): { species: string; item?: string; nickname?: string; gender?: 'M' | 'F' } {
   let rest = line;
   let item: string | undefined;
   const at = rest.lastIndexOf(' @ ');
@@ -140,12 +142,15 @@ function parseSpeciesLine(line: string): { species: string; item?: string; nickn
     item = rest.slice(at + 3).trim();
     rest = rest.slice(0, at).trim();
   }
-  rest = rest.replace(/\s*\((?:M|F)\)\s*$/, '').trim(); // strip gender marker
-  const named = rest.match(/^(.*?)\s*\(([^)]+)\)\s*$/); // Nickname (Species)
-  if (named) {
-    return { species: named[2]!.trim(), nickname: named[1]!.trim(), ...(item ? { item } : {}) };
+  let gender: 'M' | 'F' | undefined;
+  const gm = rest.match(/\((M|F)\)\s*$/); // capture the gender marker before stripping it
+  if (gm) {
+    gender = gm[1] as 'M' | 'F';
+    rest = rest.replace(/\s*\((?:M|F)\)\s*$/, '').trim();
   }
-  return { species: rest.trim(), ...(item ? { item } : {}) };
+  const named = rest.match(/^(.*?)\s*\(([^)]+)\)\s*$/); // Nickname (Species)
+  const base = named ? { species: named[2]!.trim(), nickname: named[1]!.trim() } : { species: rest.trim() };
+  return { ...base, ...(item ? { item } : {}), ...(gender ? { gender } : {}) };
 }
 
 function parseSpread(value: string): SpSpread {

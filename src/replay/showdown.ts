@@ -45,6 +45,7 @@ export function toShowdownLog(log: MatchLog): string {
   const slotByMon = new Map<string, string>(); // monId → 'p1a'
   const hpByMon = new Map<string, number>();
   let lastAttacker: string | undefined; // for |-miss| source
+  let activeWeather: string | undefined; // for per-turn |-weather|…|[upkeep]
   const place = (side: Side, pos: number, monId: string): string => {
     const slot = `${pside(side)}${ab(pos)}`;
     for (const [m, s] of slotByMon) if (s === slot) slotByMon.delete(m);
@@ -53,6 +54,7 @@ export function toShowdownLog(log: MatchLog): string {
   };
   const identName = (id: string) => sheetOf(id)?.nickname ?? sheetOf(id)?.species ?? id;
   const ident = (id: string) => `${slotByMon.get(id) ?? '?'}: ${identName(id)}`;
+  const details = (id: string, species: string) => `${species}, L50${sheetOf(id)?.gender ? `, ${sheetOf(id)!.gender}` : ''}`;
   const maxOf = (id: string) => sheetOf(id)?.maxHp ?? 100;
   const hpStr = (id: string, hp: number) => (hp <= 0 ? '0 fnt' : `${hp}/${maxOf(id)}`);
 
@@ -76,7 +78,7 @@ export function toShowdownLog(log: MatchLog): string {
     place(lead.side, lead.position, lead.monId);
     const sh = sheetOf(lead.monId)!;
     hpByMon.set(lead.monId, sh.maxHp);
-    lines.push(`|switch|${ident(lead.monId)}|${sh.species}, L50|${sh.maxHp}/${sh.maxHp}`);
+    lines.push(`|switch|${ident(lead.monId)}|${details(lead.monId, sh.species)}|${sh.maxHp}/${sh.maxHp}`);
   }
 
   for (const ev of [...log.events].sort((a, b) => a.seq - b.seq)) emit(ev);
@@ -93,7 +95,10 @@ export function toShowdownLog(log: MatchLog): string {
   function emit(ev: MatchEvent): void {
     switch (ev.type) {
       case 'turn_start':
-        if (ev.turn > 1) lines.push('|upkeep|'); // end-of-turn phase marker, before the next turn
+        if (ev.turn > 1) {
+          if (activeWeather) lines.push(`|-weather|${activeWeather}|[upkeep]`); // weather re-shown each turn
+          lines.push('|upkeep|'); // end-of-turn phase marker, before the next turn
+        }
         lines.push(`|turn|${ev.turn}`);
         return;
       case 'move_used': {
@@ -132,15 +137,17 @@ export function toShowdownLog(log: MatchLog): string {
         const sh = sheetOf(ev.in)!;
         const hp = hpByMon.get(ev.in) ?? sh.maxHp;
         hpByMon.set(ev.in, hp);
-        lines.push(`|switch|${ident(ev.in)}|${sh.species}, L50|${hpStr(ev.in, hp)}`);
+        lines.push(`|switch|${ident(ev.in)}|${details(ev.in, sh.species)}|${hpStr(ev.in, hp)}`);
         return;
       }
       case 'faint':
         lines.push(`|faint|${ident(ev.target)}`);
         return;
-      case 'status_applied':
-        lines.push(`|-status|${ident(ev.target)}|${ev.status}`);
+      case 'status_applied': {
+        const from = ev.source ? (FROM_ITEMS.has(ev.source) ? `|[from] item: ${ev.source}` : `|[from] move: ${ev.source}`) : '';
+        lines.push(`|-status|${ident(ev.target)}|${ev.status}${from}`);
         return;
+      }
       case 'status_cured':
         lines.push(`|-curestatus|${ident(ev.target)}|${ev.status}`);
         return;
@@ -155,6 +162,7 @@ export function toShowdownLog(log: MatchLog): string {
           const side = ev.side ?? 'A';
           lines.push(`|${ev.action === 'set' ? '-sidestart' : '-sideend'}|${pside(side)}: ${playerName(side)}|move: ${ev.field}`);
         } else if (WEATHER_ID[ev.field] || ev.field === 'Sun' || ev.field === 'Rain') {
+          activeWeather = ev.action === 'set' ? WEATHER_ID[ev.field] ?? ev.field : undefined;
           lines.push(`|-weather|${ev.action === 'set' ? WEATHER_ID[ev.field] ?? ev.field : 'none'}`);
         } else if (FIELD_CONDITIONS.has(ev.field)) {
           lines.push(`|${ev.action === 'set' ? '-fieldstart' : '-fieldend'}|move: ${ev.field}`);
@@ -162,12 +170,13 @@ export function toShowdownLog(log: MatchLog): string {
         return;
       }
       case 'mega_evolution':
-        lines.push(`|detailschange|${ident(ev.mon)}|${ev.megaSpecies}, L50`);
-        lines.push(`|-mega|${ident(ev.mon)}|${identName(ev.mon)}|`);
+        lines.push(`|detailschange|${ident(ev.mon)}|${details(ev.mon, ev.megaSpecies)}`);
+        lines.push(`|-mega|${ident(ev.mon)}|${sheetOf(ev.mon)?.species ?? identName(ev.mon)}|${sheetOf(ev.mon)?.item ?? ''}`);
         return;
       case 'item_or_ability_event':
         if (ev.kind === 'paradox') return; // solver-only marker (Protosynthesis/Quark Drive stat); not a Showdown line
         if (ev.kind === 'enditem') lines.push(`|-enditem|${ident(ev.mon)}|${ev.name}${ev.name.endsWith('Berry') ? '|[eat]' : ''}`);
+        else if (ev.kind === 'ability' && ev.name === 'Intimidate') lines.push(`|-ability|${ident(ev.mon)}|Intimidate|boost`);
         else lines.push(`|-${ev.kind}|${ident(ev.mon)}|${ev.name}`);
         return;
       case 'random_outcome': {
