@@ -191,6 +191,32 @@ describe('toShowdownLog', () => {
     expect(out).toContain('|cant|p1a: Incineroar|slp');
   });
 
+  it('keeps the status on the HP condition string and attributes poison/toxic damage to psn', () => {
+    const out = toShowdownLog({
+      ...LOG,
+      events: [
+        { eventId: 'st', seq: 1, turn: 1, type: 'status_applied', target: 'gar', status: 'tox' },
+        { eventId: 't2', seq: 2, turn: 2, type: 'turn_start' },
+        { eventId: 'dmg', seq: 3, turn: 2, type: 'passive_hp_change', target: 'gar', source: 'Toxic', hpBefore: 183, hpAfter: 160 },
+      ],
+    });
+    expect(out).toContain('|-status|p2a: Garchomp|tox'); // "badly poisoned!"
+    expect(out).toContain('|-damage|p2a: Garchomp|160/183 tox|[from] psn'); // HP carries the status, damage is from psn
+  });
+
+  it('clears the status suffix once cured', () => {
+    const out = toShowdownLog({
+      ...LOG,
+      events: [
+        { eventId: 's', seq: 1, turn: 1, type: 'status_applied', target: 'gar', status: 'brn' },
+        { eventId: 'c', seq: 2, turn: 1, type: 'status_cured', target: 'gar', status: 'brn' },
+        { eventId: 'd', seq: 3, turn: 1, type: 'damage', attacker: 'inc', move: 'Flare Blitz', defender: 'gar', hpBefore: 183, hpAfter: 150, crit: false, status: 'clean' },
+      ],
+    });
+    expect(out).toContain('|-damage|p2a: Garchomp|150/183'); // no status suffix after cure
+    expect(out).not.toContain('150/183 brn');
+  });
+
   it('renders a faint HP as "0 fnt"', () => {
     const koLog = toShowdownLog({ ...LOG, events: [{ eventId: 'd', seq: 1, turn: 1, type: 'damage', attacker: 'inc', move: 'Flare Blitz', defender: 'gar', hpBefore: 183, hpAfter: 0, crit: false, status: 'clean' }] });
     expect(koLog.includes('|-damage|p2a: Garchomp|0 fnt')).toBe(true);

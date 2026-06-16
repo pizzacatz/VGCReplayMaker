@@ -19,7 +19,7 @@ const PROTECTION_MOVES = new Set([
 const ABILITY_BOOST_SOURCES = new Set(['Defiant', 'Competitive', 'Guard Dog']);
 const FROM_ITEMS = new Set(['Leftovers', 'Black Sludge', 'Sitrus Berry', 'Rocky Helmet', 'Life Orb', 'Flame Orb', 'Toxic Orb', 'Binding Band', 'Air Balloon']);
 const FROM_ABILITIES = new Set(['Rough Skin', 'Iron Barbs', 'Poison Heal', 'Dry Skin']);
-const FROM_STATUS: Record<string, string> = { Burn: 'brn', Poison: 'psn', Toxic: 'tox' };
+const FROM_STATUS: Record<string, string> = { Burn: 'brn', Poison: 'psn', Toxic: 'psn' }; // toxic damage is attributed to psn
 
 /** Showdown's `[from]` attribution tag for a residual source (item: / ability: / status / move). */
 function fromTag(source: string): string {
@@ -44,6 +44,7 @@ export function toShowdownLog(log: MatchLog): string {
 
   const slotByMon = new Map<string, string>(); // monId → 'p1a'
   const hpByMon = new Map<string, number>();
+  const statusByMon = new Map<string, string>(); // monId → 'psn'/'tox'/'brn'/… — kept on the HP condition string
   let lastAttacker: string | undefined; // for |-miss| source
   let activeWeather: string | undefined; // for per-turn |-weather|…|[upkeep]
   const place = (side: Side, pos: number, monId: string): string => {
@@ -56,7 +57,8 @@ export function toShowdownLog(log: MatchLog): string {
   const ident = (id: string) => `${slotByMon.get(id) ?? '?'}: ${identName(id)}`;
   const details = (id: string, species: string) => `${species}, L50${sheetOf(id)?.gender ? `, ${sheetOf(id)!.gender}` : ''}`;
   const maxOf = (id: string) => sheetOf(id)?.maxHp ?? 100;
-  const hpStr = (id: string, hp: number) => (hp <= 0 ? '0 fnt' : `${hp}/${maxOf(id)}`);
+  // Showdown's condition string is "hp/max status" — the status suffix keeps the icon on the HP bar.
+  const hpStr = (id: string, hp: number) => (hp <= 0 ? '0 fnt' : `${hp}/${maxOf(id)}${statusByMon.get(id) ? ` ${statusByMon.get(id)}` : ''}`);
 
   const lines: string[] = [];
   lines.push(`|j|☆${log.sideA.player}`, `|j|☆${log.sideB.player}`);
@@ -141,14 +143,17 @@ export function toShowdownLog(log: MatchLog): string {
         return;
       }
       case 'faint':
+        statusByMon.delete(ev.target);
         lines.push(`|faint|${ident(ev.target)}`);
         return;
       case 'status_applied': {
+        statusByMon.set(ev.target, ev.status); // now shown on the HP bar (e.g. "9/100 psn")
         const from = ev.source ? (FROM_ITEMS.has(ev.source) ? `|[from] item: ${ev.source}` : `|[from] move: ${ev.source}`) : '';
         lines.push(`|-status|${ident(ev.target)}|${ev.status}${from}`);
         return;
       }
       case 'status_cured':
+        statusByMon.delete(ev.target);
         lines.push(`|-curestatus|${ident(ev.target)}|${ev.status}`);
         return;
       case 'stat_stage_change': {
