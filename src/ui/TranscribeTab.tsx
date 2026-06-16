@@ -6,6 +6,7 @@ import {
   backfillDerivedEvents,
   benchMons,
   diagnoseLog,
+  ejectPackTriggers,
   NATURAL_CURE_ABILITIES,
   endOfTurnEvents,
   entryEffectEvents,
@@ -189,10 +190,19 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   };
 
   // Start of match: turn 1 + lead entry abilities (Intimidate, weather/terrain).
+  // Realize a mon's entry effects into builders, and collect any Eject Pack forced-switch reminders.
+  const pushEntryEffects = (builders: Array<(seq: number, turn: number) => MatchEvent>, reminders: string[], monId: string, ability: string | undefined, includeIntim: boolean) => {
+    const evs = entryEffectEvents(ws, monId, ability, board, includeIntim).map((b) => b(0, currentTurn));
+    for (const ev of evs) builders.push((seq, turn) => ({ ...ev, seq, turn }));
+    for (const id of ejectPackTriggers(evs)) reminders.push(`Eject Pack: ${monLabel(ws, id)}'s stat drop switches it out — log its replacement.`);
+  };
+
   const startMatch = () => {
     const builders: Array<(seq: number, turn: number) => MatchEvent> = [(seq) => ({ eventId: nextEventId(), seq, turn: 1, type: 'turn_start' })];
-    for (const m of activeMonIds(board)) builders.push(...entryEffectEvents(ws, m.monId, monAbility(ws, m.monId), board, true));
+    const newReminders: string[] = [];
+    for (const m of activeMonIds(board)) pushEntryEffects(builders, newReminders, m.monId, monAbility(ws, m.monId), true);
     emit(builders);
+    setReminders(newReminders);
   };
 
   const pickActor = (monId: string) => {
@@ -408,7 +418,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   const doSwitch = (incoming: string) => {
     const slot = slotOfMon(board, actor!);
     if (!slot || !actor) return;
-    setReminders([]); // logging a switch resolves any pending forced-switch reminder
+    const newReminders: string[] = []; // logging a switch resolves the old reminder; the incoming mon may raise a new one
     const { side, position } = slotPosition(slot);
     const builders: Array<(seq: number, turn: number) => MatchEvent> = [];
     // Regenerator: the OUTGOING mon restores 1/3 max HP on switch-out (so it returns healthier).
@@ -427,8 +437,9 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
       builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'status_cured', target: t, status: outStatus }));
     }
     builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'switch', side, position, out: actor, in: incoming }));
-    builders.push(...entryEffectEvents(ws, incoming, monAbility(ws, incoming), board, true)); // Intimidate / weather on entry
+    pushEntryEffects(builders, newReminders, incoming, monAbility(ws, incoming), true); // Intimidate / weather on entry
     emit(builders);
+    setReminders(newReminders);
     reset();
   };
 

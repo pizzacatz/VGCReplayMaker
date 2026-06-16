@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { MatchEvent, MatchLog } from '../log';
 import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { backfillDerivedEvents, broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, fieldExpiryEvents, holdsEjectPack, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, moveStatChangeEvents, moveStatus, moveType, oneHitSurvivor, planTargets, protectionBlocking, reactiveDefenderEvents, switchForcingOnHit, typeEffectiveness, type MonEntry, type Workspace } from './model';
+import { backfillDerivedEvents, broughtInfo, buildLog, ejectPackTriggers, endOfTurnEvents, entryEffectEvents, estimateDamage, fieldExpiryEvents, holdsEjectPack, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, moveStatChangeEvents, moveStatus, moveType, oneHitSurvivor, planTargets, protectionBlocking, reactiveDefenderEvents, switchForcingOnHit, typeEffectiveness, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -463,6 +463,31 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
     expect(make([]).some((e) => e.type === 'item_or_ability_event' && e.kind === 'item' && e.name === 'Air Balloon')).toBe(true);
     // once it has popped (enditem logged), it isn't re-announced.
     expect(make([{ eventId: 'pop', seq: 1, turn: 1, type: 'item_or_ability_event', mon: 'A0', kind: 'enditem', name: 'Air Balloon' }]).length).toBe(0);
+  });
+
+  it('entryEffectEvents: Intimidate drops an Eject Pack holder → enditem; ejectPackTriggers finds it', () => {
+    const inc = entry('A', 0, 'Incineroar');
+    inc.parsed.ability = 'Intimidate';
+    const gar = entry('B', 0, 'Garchomp');
+    gar.parsed.item = 'Eject Pack';
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [inc], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [gar], leads: ['B0'] },
+      events: [],
+    };
+    const board = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+    const evs = entryEffectEvents(ws, 'A0', 'Intimidate', board, true).map((b, i) => b(i + 1, 1));
+    // the Attack drop is logged, and the Eject Pack is consumed.
+    expect(evs.some((e) => e.type === 'stat_stage_change' && e.target === 'B0' && e.stat === 'atk' && e.stages === -1)).toBe(true);
+    expect(evs.some((e) => e.type === 'item_or_ability_event' && e.kind === 'enditem' && e.name === 'Eject Pack' && e.mon === 'B0')).toBe(true);
+    expect(ejectPackTriggers(evs)).toEqual(['B0']);
+    // a Clear-Body holder takes no drop → no Eject Pack trigger.
+    const gar2 = entry('B', 0, 'Garchomp');
+    gar2.parsed.item = 'Eject Pack';
+    gar2.parsed.ability = 'Clear Body';
+    const ws2: Workspace = { ...ws, sideB: { player: 'B', rawPaste: '', mons: [gar2], leads: ['B0'] } };
+    const board2 = new ReplayPlayer(toProtocol(buildLog(ws2))).stateAt(99);
+    expect(ejectPackTriggers(entryEffectEvents(ws2, 'A0', 'Intimidate', board2, true).map((b, i) => b(i + 1, 1)))).toEqual([]);
   });
 
   it('moveMakesContact reads the dex flag', () => {

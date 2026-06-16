@@ -509,6 +509,8 @@ export function entryEffectEvents(ws: Workspace, monId: string, ability: string 
       // The drop triggers a retaliation ability — Defiant (+2 Atk, e.g. Kingambit) / Competitive (+2 SpA).
       if (fa === 'Defiant') out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target, stat: 'atk', stages: 2, source: 'Defiant' }));
       else if (fa === 'Competitive') out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target, stat: 'spa', stages: 2, source: 'Competitive' }));
+      // Eject Pack: the Attack drop switches the holder out (the replacement is a player choice → reminder).
+      if (holdsEjectPack(ws, target)) out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: target, kind: 'enditem', name: 'Eject Pack' }));
     }
   }
   const setterItem = monItem(ws, monId);
@@ -720,6 +722,13 @@ export function switchForcingOnHit(ws: Workspace, defender: string): 'Eject Butt
 /** Whether a mon holds an un-used Eject Pack (switches it out when one of its stats is lowered). */
 export function holdsEjectPack(ws: Workspace, monId: string): boolean {
   return monItem(ws, monId) === 'Eject Pack' && !itemConsumed(ws, monId);
+}
+
+/** Mon ids that just triggered Eject Pack in a freshly-built event list (→ forced-switch reminders). */
+export function ejectPackTriggers(events: MatchEvent[]): string[] {
+  return events
+    .filter((e): e is Extract<MatchEvent, { type: 'item_or_ability_event' }> => e.type === 'item_or_ability_event' && e.kind === 'enditem' && e.name === 'Eject Pack')
+    .map((e) => e.mon);
 }
 function speciesTypes(species: string): string[] {
   try {

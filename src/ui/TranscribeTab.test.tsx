@@ -236,6 +236,26 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText(/Focus Sash/)).toBeTruthy(); // the Sash was consumed
   });
 
+  it('Eject Pack: an Intimidate lead vs an Eject Pack holder raises a switch reminder at start', () => {
+    const inc = entry('A', 0, 'Incineroar');
+    inc.parsed.ability = 'Intimidate';
+    const gar = entry('B', 0, 'Garchomp');
+    gar.parsed.item = 'Eject Pack';
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [inc], leads: ['A0'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [gar, entry('B', 1, 'Annihilape')], leads: ['B0'] },
+      events: [],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getByText, getAllByText } = render(<H />);
+    fireEvent.click(getByText(/Start match/));
+    expect(getByText(/Follow-up needed/)).toBeTruthy();
+    expect(getAllByText(/Eject Pack/).length).toBeGreaterThan(0);
+  });
+
   it('Eject Button: a hit consumes the item and prompts a switch reminder', () => {
     const chomp = entry('B', 0, 'Garchomp');
     chomp.parsed.item = 'Eject Button';
