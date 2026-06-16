@@ -490,6 +490,35 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
     expect(ejectPackTriggers(entryEffectEvents(ws2, 'A0', 'Intimidate', board2, true).map((b, i) => b(i + 1, 1)))).toEqual([]);
   });
 
+  it('entryEffectEvents: Sticky Web lowers a grounded switch-in’s Speed (not Flying/Levitate), with Eject Pack', () => {
+    // Web is up on side B; a B-side mon switches in. Build the board from a log that sets the web.
+    const make = (species: string, opts: { ability?: string; item?: string } = {}) => {
+      const switcher = entry('B', 1, species);
+      if (opts.ability) switcher.parsed.ability = opts.ability;
+      if (opts.item) switcher.parsed.item = opts.item;
+      const ws: Workspace = {
+        sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+        sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp'), switcher], leads: ['B0'] },
+        events: [{ eventId: 'web', seq: 1, turn: 1, type: 'field_change', field: 'Sticky Web', action: 'set', side: 'B' }],
+      };
+      const board = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+      return entryEffectEvents(ws, 'B1', switcher.parsed.ability, board, true).map((b, i) => b(i + 1, 1));
+    };
+    // grounded mon → Speed −1.
+    const grounded = make('Garchomp');
+    expect(grounded.find((e) => e.type === 'stat_stage_change')).toMatchObject({ target: 'B1', stat: 'spe', stages: -1, source: 'Sticky Web' });
+    // Flying type → no drop.
+    expect(make('Talonflame').some((e) => e.type === 'stat_stage_change' && e.source === 'Sticky Web')).toBe(false);
+    // Levitate → no drop.
+    expect(make('Garchomp', { ability: 'Levitate' }).some((e) => e.type === 'stat_stage_change' && e.source === 'Sticky Web')).toBe(false);
+    // Air Balloon → no drop (but it does get announced).
+    expect(make('Garchomp', { item: 'Air Balloon' }).some((e) => e.type === 'stat_stage_change' && e.source === 'Sticky Web')).toBe(false);
+    // Clear Body blocks the drop.
+    expect(make('Garchomp', { ability: 'Clear Body' }).some((e) => e.type === 'stat_stage_change')).toBe(false);
+    // Eject Pack holder gets dropped → item consumed.
+    expect(ejectPackTriggers(make('Garchomp', { item: 'Eject Pack' }))).toEqual(['B1']);
+  });
+
   it('moveMakesContact reads the dex flag', () => {
     expect(moveMakesContact('Flare Blitz')).toBe(true);
     expect(moveMakesContact('Earthquake')).toBe(false);

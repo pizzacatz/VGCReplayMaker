@@ -490,6 +490,24 @@ export function entryEffectEvents(ws: Workspace, monId: string, ability: string 
   if (monItem(ws, monId) === 'Air Balloon' && !itemConsumed(ws, monId)) {
     out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: monId, kind: 'item', name: 'Air Balloon' }));
   }
+  // Sticky Web: a GROUNDED mon switching into a webbed side has its Speed lowered (blocks/Contrary/
+  // Defiant/Eject Pack all apply, as for any foe-induced drop). Only on a fresh entry, not on mega.
+  const enterSide = rosterSideOf(ws, monId);
+  if (includeIntimidate && enterSide && board.sides[enterSide]?.includes('Sticky Web')) {
+    const item = monItem(ws, monId);
+    const types = speciesTypes(allMons(ws).find((m) => m.monId === monId)?.parsed.species ?? '');
+    const grounded = !types.includes('Flying') && ability !== 'Levitate' && item !== 'Air Balloon';
+    const blocked = !!ability && (STAT_DROP_BLOCK_ALL.has(ability) || STAT_DROP_BLOCK_ONE[ability] === 'spe');
+    if (grounded && !blocked && item !== 'Clear Amulet') {
+      const stages = ability === 'Contrary' ? 1 : -1;
+      out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target: monId, stat: 'spe', stages, source: 'Sticky Web' }));
+      if (stages < 0) {
+        if (ability === 'Defiant') out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target: monId, stat: 'atk', stages: 2, source: 'Defiant' }));
+        else if (ability === 'Competitive') out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'stat_stage_change', target: monId, stat: 'spa', stages: 2, source: 'Competitive' }));
+        if (holdsEjectPack(ws, monId)) out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: monId, kind: 'enditem', name: 'Eject Pack' }));
+      }
+    }
+  }
   if (!ability) return out;
   if (includeIntimidate && ability === 'Intimidate') {
     const side = rosterSideOf(ws, monId);
