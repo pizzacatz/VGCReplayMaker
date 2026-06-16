@@ -3,8 +3,10 @@ import type { MatchEvent } from '../log';
 import type { ReplayState } from '../replay';
 import {
   activeMonIds,
+  backfillDerivedEvents,
   benchMons,
   diagnoseLog,
+  NATURAL_CURE_ABILITIES,
   endOfTurnEvents,
   entryEffectEvents,
   estimateDamage,
@@ -71,6 +73,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   const [outcomes, setOutcomes] = useState<Record<string, TargetOutcome>>({});
   const [manualFail, setManualFail] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [backfillNote, setBackfillNote] = useState<string | null>(null);
 
   const currentTurn = useMemo(() => {
     const ts = ws.events.filter((e) => e.type === 'turn_start');
@@ -375,10 +378,17 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     // Regenerator: the OUTGOING mon restores 1/3 max HP on switch-out (so it returns healthier).
     const outMax = monMaxHp(ws, actor);
     const outHp = board.slots[slot]?.hp ?? outMax;
-    if (monAbility(ws, actor) === 'Regenerator' && outHp > 0 && outHp < outMax) {
+    const outAbility = monAbility(ws, actor);
+    if (outAbility === 'Regenerator' && outHp > 0 && outHp < outMax) {
       const healed = Math.min(outMax, outHp + Math.floor(outMax / 3));
       const t = actor;
       builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'heal', target: t, source: 'Regenerator', hpBefore: outHp, hpAfter: healed }));
+    }
+    // Natural Cure: the OUTGOING mon's status condition clears as it switches out.
+    const outStatus = board.status[actor];
+    if (outAbility && NATURAL_CURE_ABILITIES.has(outAbility) && outStatus && outHp > 0) {
+      const t = actor;
+      builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'status_cured', target: t, status: outStatus }));
     }
     builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'switch', side, position, out: actor, in: incoming }));
     builders.push(...entryEffectEvents(ws, incoming, monAbility(ws, incoming), board, true)); // Intimidate / weather on entry
@@ -468,6 +478,22 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
             ) : null;
           })()}
         </div>
+
+        {ws.events.length > 0 && (
+          <div className="controls" style={{ marginTop: 0 }}>
+            <button
+              title="Scan the log and add any missing auto-derived effects (Regenerator/Natural Cure on switch-out, weather/field expiry) without changing what's there. Use after importing or on an older game. Safe to run repeatedly."
+              onClick={() => {
+                const { events, added } = backfillDerivedEvents(ws);
+                if (added > 0) setWs({ ...ws, events });
+                setBackfillNote(added > 0 ? `Added ${added} missing effect${added === 1 ? '' : 's'}.` : 'Nothing missing — the log is already up to date.');
+              }}
+            >
+              ⟳ Re-derive effects
+            </button>
+            {backfillNote && <span className="muted" style={{ fontSize: 12 }}>{backfillNote}</span>}
+          </div>
+        )}
 
         <Board actives={actives} actor={actor} onPick={pickActor} youName={ws.sideA.player} oppName={ws.sideB.player} />
 

@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { MatchEvent, MatchLog } from '../log';
 import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, fieldExpiryEvents, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, moveStatChangeEvents, moveStatus, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
+import { backfillDerivedEvents, broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, fieldExpiryEvents, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, moveStatChangeEvents, moveStatus, planTargets, protectionBlocking, typeEffectiveness, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -285,6 +285,99 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
       .map((bld, i) => bld(i + 1, 1))
       .filter((e): e is Extract<MatchEvent, { type: 'stat_stage_change' }> => e.type === 'stat_stage_change');
     expect(ev.map((e) => [e.target, e.stat, e.stages]).sort()).toEqual([['A0', 'def', -1], ['A0', 'spd', -1]]);
+  });
+
+  it('backfillDerivedEvents: inserts a missing Regenerator heal on switch-out, idempotently', () => {
+    const tox = entry('A', 0, 'Toxapex');
+    tox.parsed.ability = 'Regenerator';
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [tox, entry('A', 1, 'Aerodactyl')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [
+        { eventId: 't1', seq: 1, turn: 1, type: 'turn_start' },
+        { eventId: 'd', seq: 2, turn: 1, type: 'damage', attacker: 'B0', move: 'Earthquake', defender: 'A0', hpBefore: 175, hpAfter: 100, crit: false, status: 'clean' },
+        // old transcript: the Regenerator heal was never logged.
+        { eventId: 's', seq: 3, turn: 1, type: 'switch', side: 'A', position: 0, out: 'A0', in: 'A1' },
+      ],
+    };
+    const { events, added } = backfillDerivedEvents(ws);
+    expect(added).toBe(1);
+    const heal = events.find((e) => e.type === 'heal' && e.source === 'Regenerator');
+    expect(heal).toMatchObject({ target: 'A0', hpBefore: 100, hpAfter: 158 }); // 100 + floor(175/3)
+    // the heal must precede the switch
+    const healIdx = events.findIndex((e) => e.type === 'heal');
+    const switchIdx = events.findIndex((e) => e.type === 'switch');
+    expect(healIdx).toBeLessThan(switchIdx);
+    // running again over the backfilled log adds nothing.
+    expect(backfillDerivedEvents({ ...ws, events }).added).toBe(0);
+  });
+
+  it('backfillDerivedEvents: a full-HP or fainted Regenerator mon gets no heal', () => {
+    const tox = entry('A', 0, 'Toxapex');
+    tox.parsed.ability = 'Regenerator';
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [tox, entry('A', 1, 'Aerodactyl')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [
+        { eventId: 't1', seq: 1, turn: 1, type: 'turn_start' },
+        { eventId: 's', seq: 2, turn: 1, type: 'switch', side: 'A', position: 0, out: 'A0', in: 'A1' }, // A0 at full HP
+      ],
+    };
+    expect(backfillDerivedEvents(ws).added).toBe(0);
+  });
+
+  it('backfillDerivedEvents: inserts a missing Natural Cure status-cure on switch-out', () => {
+    const mon = entry('A', 0, 'Blissey');
+    mon.parsed.ability = 'Natural Cure';
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [mon, entry('A', 1, 'Aerodactyl')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [
+        { eventId: 't1', seq: 1, turn: 1, type: 'turn_start' },
+        { eventId: 'st', seq: 2, turn: 1, type: 'status_applied', target: 'A0', status: 'brn' },
+        { eventId: 's', seq: 3, turn: 1, type: 'switch', side: 'A', position: 0, out: 'A0', in: 'A1' },
+      ],
+    };
+    const { events, added } = backfillDerivedEvents(ws);
+    expect(added).toBe(1);
+    expect(events.find((e) => e.type === 'status_cured')).toMatchObject({ target: 'A0', status: 'brn' });
+    expect(backfillDerivedEvents({ ...ws, events }).added).toBe(0); // idempotent
+  });
+
+  it('backfillDerivedEvents: inserts missing weather expiry at the end of its turn', () => {
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [
+        { eventId: 'w', seq: 1, turn: 1, type: 'field_change', field: 'Sun', action: 'set' },
+        ...Array.from({ length: 6 }, (_, i) => ({ eventId: `t${i + 1}`, seq: i + 2, turn: i + 1, type: 'turn_start' } as MatchEvent)),
+      ],
+    };
+    const { events, added } = backfillDerivedEvents(ws);
+    expect(added).toBe(1);
+    const fade = events.find((e) => e.type === 'field_change' && e.action === 'end' && e.field === 'Sun');
+    expect(fade).toBeTruthy();
+    expect((fade as Extract<MatchEvent, { type: 'field_change' }>).turn).toBe(5); // faded at end of turn 5
+    // it must sit before turn 6's start
+    const fadeIdx = events.findIndex((e) => e.type === 'field_change' && e.action === 'end');
+    const t6Idx = events.findIndex((e) => e.type === 'turn_start' && e.turn === 6);
+    expect(fadeIdx).toBeLessThan(t6Idx);
+    expect(backfillDerivedEvents({ ...ws, events }).added).toBe(0); // idempotent
+  });
+
+  it('backfillDerivedEvents: expires weather on the final turn once the game is over', () => {
+    const ws: Workspace = {
+      sideA: { player: 'A', rawPaste: '', mons: [entry('A', 0, 'Incineroar')], leads: ['A0'] },
+      sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      result: { winner: 'A', reason: 'ko' },
+      events: [
+        { eventId: 'w', seq: 1, turn: 1, type: 'field_change', field: 'Sun', action: 'set' },
+        ...Array.from({ length: 5 }, (_, i) => ({ eventId: `t${i + 1}`, seq: i + 2, turn: i + 1, type: 'turn_start' } as MatchEvent)),
+      ],
+    };
+    const { events, added } = backfillDerivedEvents(ws);
+    expect(added).toBe(1); // game over → final turn's upkeep counts, Sun fades
+    expect(events.some((e) => e.type === 'field_change' && e.action === 'end' && e.field === 'Sun')).toBe(true);
   });
 
   it('moveMakesContact reads the dex flag', () => {

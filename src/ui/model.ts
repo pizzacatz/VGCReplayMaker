@@ -822,6 +822,84 @@ export function fieldExpiryEvents(ws: Workspace, board: ReplayState): EventBuild
   return out;
 }
 
+/** Abilities that cure the mon's status condition when it switches out. */
+export const NATURAL_CURE_ABILITIES = new Set(['Natural Cure']);
+
+/**
+ * Non-destructive "re-derive" pass: walks the existing log and INSERTS any
+ * auto-derived effects that are missing, without removing or altering what's
+ * already there. Idempotent — running it again adds nothing. This fixes the
+ * "frozen transcript" problem: a game logged before a rule existed (e.g. the
+ * Regenerator heal, weather expiry, Natural Cure) inherits it after a re-derive.
+ *
+ * Currently backfills: end-of-turn field/weather expiry, and the switch-out
+ * abilities Regenerator (heal 1/3) and Natural Cure (clear status). Effects that
+ * depend on un-recorded player choices are left alone.
+ */
+export function backfillDerivedEvents(ws: Workspace): { events: MatchEvent[]; added: number } {
+  const sorted = [...ws.events].sort((a, b) => a.seq - b.seq);
+  const out: MatchEvent[] = [];
+  let added = 0;
+  const push = (ev: MatchEvent) => out.push({ ...ev, seq: out.length + 1 });
+  const boardNow = (): ReplayState | null => {
+    try {
+      return reconstruct(ws, out);
+    } catch {
+      return null;
+    }
+  };
+  // A matching derived event already sitting just before the switch we're at → don't duplicate.
+  const tailHas = (pred: (e: MatchEvent) => boolean) => pred(out[out.length - 1] ?? ({} as MatchEvent)) || pred(out[out.length - 2] ?? ({} as MatchEvent));
+
+  for (const e of sorted) {
+    // Field/weather expiry belongs at the end of the turn just before the next turn starts.
+    if (e.type === 'turn_start' && e.turn > 1) {
+      const board = boardNow();
+      if (board) {
+        for (const b of fieldExpiryEvents({ ...ws, events: out }, board)) {
+          push(b(out.length + 1, e.turn - 1));
+          added++;
+        }
+      }
+    }
+    // Switch-out abilities resolve on the OUTGOING mon, immediately before the switch.
+    if (e.type === 'switch' && e.out) {
+      const board = boardNow();
+      if (board) {
+        const mon = e.out;
+        const ability = monAbility(ws, mon);
+        const slot = slotOfMon(board, mon);
+        const hp = slot ? board.slots[slot]!.hp : 0;
+        const max = monMaxHp(ws, mon);
+        const status = board.status[mon];
+        if (ability === 'Regenerator' && hp > 0 && hp < max && !tailHas((x) => x.type === 'heal' && x.source === 'Regenerator' && x.target === mon)) {
+          const healed = Math.min(max, hp + Math.floor(max / 3));
+          push({ eventId: nextEventId(), seq: 0, turn: e.turn, type: 'heal', target: mon, source: 'Regenerator', hpBefore: hp, hpAfter: healed });
+          added++;
+        }
+        if (ability && NATURAL_CURE_ABILITIES.has(ability) && status && hp > 0 && !tailHas((x) => x.type === 'status_cured' && x.target === mon)) {
+          push({ eventId: nextEventId(), seq: 0, turn: e.turn, type: 'status_cured', target: mon, status });
+          added++;
+        }
+      }
+    }
+    push(e);
+  }
+  // Final turn: if the game has ended, its last upkeep is done — expire anything past its life.
+  const gameOver = !!ws.result || ws.events.some((e) => e.type === 'forfeit');
+  if (gameOver) {
+    const board = boardNow();
+    if (board) {
+      const lastTurn = out.reduce((mx, e) => Math.max(mx, e.turn), 0);
+      for (const b of fieldExpiryEvents({ ...ws, events: out }, board)) {
+        push(b(out.length + 1, lastTurn));
+        added++;
+      }
+    }
+  }
+  return { events: out, added };
+}
+
 /**
  * Badly-poisoned (toxic) turn counter for the end-of-turn ramp (n/16). Counts from
  * the latest toxic application or the mon's most recent switch-in (a switch resets
