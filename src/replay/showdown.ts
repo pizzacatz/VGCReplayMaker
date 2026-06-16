@@ -15,6 +15,19 @@ const PROTECTION_MOVES = new Set([
   'Protect', 'Detect', 'Wide Guard', 'Quick Guard', 'Spiky Shield', "King's Shield", 'Baneful Bunker',
   'Silk Trap', 'Obstruct', 'Burning Bulwark', 'Max Guard', 'Crafty Shield', 'Mat Block',
 ]);
+/** Self-targeting boost abilities → announced as |-ability| before the boost. */
+const ABILITY_BOOST_SOURCES = new Set(['Defiant', 'Competitive', 'Guard Dog']);
+const FROM_ITEMS = new Set(['Leftovers', 'Black Sludge', 'Sitrus Berry', 'Rocky Helmet', 'Life Orb', 'Flame Orb', 'Toxic Orb', 'Binding Band', 'Air Balloon']);
+const FROM_ABILITIES = new Set(['Rough Skin', 'Iron Barbs', 'Poison Heal', 'Dry Skin']);
+const FROM_STATUS: Record<string, string> = { Burn: 'brn', Poison: 'psn', Toxic: 'tox' };
+
+/** Showdown's `[from]` attribution tag for a residual source (item: / ability: / status / move). */
+function fromTag(source: string): string {
+  if (FROM_ITEMS.has(source)) return `[from] item: ${source}`;
+  if (FROM_ABILITIES.has(source)) return `[from] ability: ${source}`;
+  if (FROM_STATUS[source]) return `[from] ${FROM_STATUS[source]}`;
+  return `[from] ${source}`;
+}
 const FIELD_CONDITIONS = new Set(['Electric Terrain', 'Grassy Terrain', 'Psychic Terrain', 'Misty Terrain', 'Trick Room', 'Gravity']);
 const SIDE_CONDITIONS = new Set(['Reflect', 'Light Screen', 'Aurora Veil', 'Tailwind', 'Safeguard', 'Mist']);
 
@@ -80,11 +93,18 @@ export function toShowdownLog(log: MatchLog): string {
   function emit(ev: MatchEvent): void {
     switch (ev.type) {
       case 'turn_start':
+        if (ev.turn > 1) lines.push('|upkeep|'); // end-of-turn phase marker, before the next turn
         lines.push(`|turn|${ev.turn}`);
         return;
       case 'move_used': {
-        const tgt = ev.targets.map((t) => slotByMon.get(t) && ident(t)).filter(Boolean)[0] ?? ident(ev.user);
-        lines.push(`|move|${ident(ev.user)}|${ev.move}|${tgt}`);
+        if (ev.isSpread && ev.targets.length) {
+          const slots = ev.targets.map((t) => slotByMon.get(t)).filter(Boolean).join(',');
+          const first = ev.targets.map((t) => slotByMon.get(t) && ident(t)).filter(Boolean)[0] ?? ident(ev.user);
+          lines.push(`|move|${ident(ev.user)}|${ev.move}|${first}|[spread] ${slots}`);
+        } else {
+          const tgt = ev.targets.map((t) => slotByMon.get(t) && ident(t)).filter(Boolean)[0] ?? ident(ev.user);
+          lines.push(`|move|${ident(ev.user)}|${ev.move}|${tgt}`);
+        }
         if (PROTECTION_MOVES.has(ev.move)) lines.push(`|-singleturn|${ident(ev.user)}|${ev.move}`); // "protected itself!"
         lastAttacker = ev.user;
         return;
@@ -96,15 +116,16 @@ export function toShowdownLog(log: MatchLog): string {
         else if (ev.observedEffectiveness === '0x') lines.push(`|-immune|${ident(ev.defender)}`);
         hpByMon.set(ev.defender, ev.hpAfter);
         lines.push(`|-damage|${ident(ev.defender)}|${hpStr(ev.defender, ev.hpAfter)}`);
+        if (ev.hits && ev.hits > 1) lines.push(`|-hitcount|${ident(ev.defender)}|${ev.hits}`); // "Hit N times!"
         return;
       }
       case 'passive_hp_change':
         hpByMon.set(ev.target, ev.hpAfter);
-        lines.push(`|-damage|${ident(ev.target)}|${hpStr(ev.target, ev.hpAfter)}|[from] ${ev.source}`);
+        lines.push(`|-damage|${ident(ev.target)}|${hpStr(ev.target, ev.hpAfter)}|${fromTag(ev.source)}`);
         return;
       case 'heal':
         hpByMon.set(ev.target, ev.hpAfter);
-        lines.push(`|-heal|${ident(ev.target)}|${hpStr(ev.target, ev.hpAfter)}|[from] ${ev.source}`);
+        lines.push(`|-heal|${ident(ev.target)}|${hpStr(ev.target, ev.hpAfter)}|${fromTag(ev.source)}`);
         return;
       case 'switch': {
         place(ev.side, ev.position, ev.in);
@@ -124,6 +145,7 @@ export function toShowdownLog(log: MatchLog): string {
         lines.push(`|-curestatus|${ident(ev.target)}|${ev.status}`);
         return;
       case 'stat_stage_change': {
+        if (ev.source && ABILITY_BOOST_SOURCES.has(ev.source)) lines.push(`|-ability|${ident(ev.target)}|${ev.source}`); // "Kingambit's Defiant!"
         const verb = ev.stages >= 0 ? '-boost' : '-unboost';
         lines.push(`|${verb}|${ident(ev.target)}|${ev.stat}|${Math.abs(ev.stages)}`);
         return;
@@ -144,7 +166,9 @@ export function toShowdownLog(log: MatchLog): string {
         lines.push(`|-mega|${ident(ev.mon)}|${identName(ev.mon)}|`);
         return;
       case 'item_or_ability_event':
-        lines.push(`|-${ev.kind}|${ident(ev.mon)}|${ev.name}`);
+        if (ev.kind === 'paradox') return; // solver-only marker (Protosynthesis/Quark Drive stat); not a Showdown line
+        if (ev.kind === 'enditem') lines.push(`|-enditem|${ident(ev.mon)}|${ev.name}${ev.name.endsWith('Berry') ? '|[eat]' : ''}`);
+        else lines.push(`|-${ev.kind}|${ident(ev.mon)}|${ev.name}`);
         return;
       case 'random_outcome': {
         if (ev.eventKind === 'blocked') {

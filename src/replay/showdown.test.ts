@@ -92,6 +92,51 @@ describe('toShowdownLog', () => {
     expect(out).toContain('|-miss|p1a: Incineroar|p2a: Garchomp');
   });
 
+  it('tags a spread move with [spread] and the hit slots', () => {
+    const out = toShowdownLog({ ...LOG, events: [{ eventId: 'm', seq: 1, turn: 1, type: 'move_used', user: 'inc', move: 'Rock Slide', targets: ['gar', 'tal'], isSpread: true }] });
+    expect(out).toContain('|move|p1a: Incineroar|Rock Slide|p2a: Garchomp|[spread] p2a,p2b');
+  });
+
+  it('writes proper [from] attribution (item: / status)', () => {
+    const out = toShowdownLog({
+      ...LOG,
+      events: [
+        { eventId: 'h', seq: 1, turn: 1, type: 'heal', target: 'gar', source: 'Leftovers', hpBefore: 150, hpAfter: 161 },
+        { eventId: 'p', seq: 2, turn: 1, type: 'passive_hp_change', target: 'gar', source: 'Burn', hpBefore: 161, hpAfter: 150 },
+        { eventId: 's', seq: 3, turn: 1, type: 'heal', target: 'gar', source: 'Sitrus Berry', hpBefore: 50, hpAfter: 90 },
+      ],
+    });
+    expect(out).toContain('[from] item: Leftovers');
+    expect(out).toContain('[from] brn');
+    expect(out).toContain('[from] item: Sitrus Berry');
+  });
+
+  it('announces a self-boost ability before the boost', () => {
+    const out = toShowdownLog({ ...LOG, events: [{ eventId: 'd', seq: 1, turn: 1, type: 'stat_stage_change', target: 'gar', stat: 'atk', stages: 2, source: 'Defiant' }] });
+    expect(out).toContain('|-ability|p2a: Garchomp|Defiant');
+    expect(out.indexOf('|-ability|p2a: Garchomp|Defiant')).toBeLessThan(out.indexOf('|-boost|p2a: Garchomp|atk|2'));
+  });
+
+  it('emits -hitcount, |upkeep| before a turn, and berry [eat]', () => {
+    const out = toShowdownLog({
+      ...LOG,
+      events: [
+        { eventId: 'm', seq: 1, turn: 1, type: 'move_used', user: 'inc', move: 'Bullet Seed', targets: ['gar'] },
+        { eventId: 'dd', seq: 2, turn: 1, type: 'damage', attacker: 'inc', move: 'Bullet Seed', defender: 'gar', hpBefore: 183, hpAfter: 150, crit: false, status: 'clean', hits: 3 },
+        { eventId: 'ee', seq: 3, turn: 1, type: 'item_or_ability_event', mon: 'gar', kind: 'enditem', name: 'Sitrus Berry' },
+        { eventId: 't2', seq: 4, turn: 2, type: 'turn_start' },
+      ],
+    });
+    expect(out).toContain('|-hitcount|p2a: Garchomp|3');
+    expect(out).toContain('|-enditem|p2a: Garchomp|Sitrus Berry|[eat]');
+    expect(out.indexOf('|upkeep|')).toBeLessThan(out.indexOf('|turn|2'));
+  });
+
+  it('does not emit an invalid line for the solver-only paradox marker', () => {
+    const out = toShowdownLog({ ...LOG, events: [{ eventId: 'q', seq: 1, turn: 1, type: 'item_or_ability_event', mon: 'gar', kind: 'paradox', name: 'atk' }] });
+    expect(out).not.toContain('paradox');
+  });
+
   it('renders a faint HP as "0 fnt"', () => {
     const koLog = toShowdownLog({ ...LOG, events: [{ eventId: 'd', seq: 1, turn: 1, type: 'damage', attacker: 'inc', move: 'Flare Blitz', defender: 'gar', hpBefore: 183, hpAfter: 0, crit: false, status: 'clean' }] });
     expect(koLog.includes('|-damage|p2a: Garchomp|0 fnt')).toBe(true);
