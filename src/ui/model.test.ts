@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { MatchEvent, MatchLog } from '../log';
 import type { ParsedMon } from '../import';
 import { ReplayPlayer, toProtocol } from '../replay';
-import { backfillDerivedEvents, broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, fieldExpiryEvents, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, moveStatChangeEvents, moveStatus, moveType, oneHitSurvivor, planTargets, protectionBlocking, reactiveDefenderEvents, typeEffectiveness, type MonEntry, type Workspace } from './model';
+import { backfillDerivedEvents, broughtInfo, buildLog, endOfTurnEvents, entryEffectEvents, estimateDamage, fieldExpiryEvents, holdsEjectPack, leadMonIds, leadSlots, megaFormeAbility, megaFormeFromItem, moveCanFlinch, moveMakesContact, moveRecoilDrain, moveStatChangeEvents, moveStatus, moveType, oneHitSurvivor, planTargets, protectionBlocking, reactiveDefenderEvents, switchForcingOnHit, typeEffectiveness, type MonEntry, type Workspace } from './model';
 
 const board = (() => {
   const log: MatchLog = {
@@ -427,6 +427,42 @@ describe('deterministic resolver — auto-derive engine consequences', () => {
   it('moveType reads the dex move type', () => {
     expect(moveType('Thunderbolt')).toBe('Electric');
     expect(moveType('Surf')).toBe('Water');
+  });
+
+  it('switchForcingOnHit / holdsEjectPack identify the item, respecting prior consumption', () => {
+    const make = (item: string, consumed = false) => {
+      const mon = entry('A', 0, 'Garchomp');
+      mon.parsed.item = item;
+      return {
+        sideA: { player: 'A', rawPaste: '', mons: [mon], leads: ['A0'] },
+        sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Incineroar')], leads: ['B0'] },
+        events: consumed ? [{ eventId: 'x', seq: 1, turn: 1, type: 'item_or_ability_event', mon: 'A0', kind: 'enditem', name: item }] : [],
+      } as Workspace;
+    };
+    expect(switchForcingOnHit(make('Eject Button'), 'A0')).toBe('Eject Button');
+    expect(switchForcingOnHit(make('Red Card'), 'A0')).toBe('Red Card');
+    expect(switchForcingOnHit(make('Leftovers'), 'A0')).toBeNull();
+    expect(switchForcingOnHit(make('Eject Button', true), 'A0')).toBeNull(); // already used
+    expect(holdsEjectPack(make('Eject Pack'), 'A0')).toBe(true);
+    expect(holdsEjectPack(make('Eject Pack', true), 'A0')).toBe(false);
+    expect(holdsEjectPack(make('Focus Sash'), 'A0')).toBe(false);
+  });
+
+  it('entryEffectEvents announces Air Balloon on entry (until it has popped)', () => {
+    const make = (events: MatchEvent[]) => {
+      const mon = entry('A', 0, 'Gholdengo');
+      mon.parsed.item = 'Air Balloon';
+      const ws: Workspace = {
+        sideA: { player: 'A', rawPaste: '', mons: [mon], leads: ['A0'] },
+        sideB: { player: 'B', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+        events,
+      };
+      const board = new ReplayPlayer(toProtocol(buildLog(ws))).stateAt(99);
+      return entryEffectEvents(ws, 'A0', 'Good as Gold', board, true).map((b, i) => b(i + 1, 1));
+    };
+    expect(make([]).some((e) => e.type === 'item_or_ability_event' && e.kind === 'item' && e.name === 'Air Balloon')).toBe(true);
+    // once it has popped (enditem logged), it isn't re-announced.
+    expect(make([{ eventId: 'pop', seq: 1, turn: 1, type: 'item_or_ability_event', mon: 'A0', kind: 'enditem', name: 'Air Balloon' }]).length).toBe(0);
   });
 
   it('moveMakesContact reads the dex flag', () => {

@@ -236,6 +236,27 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText(/Focus Sash/)).toBeTruthy(); // the Sash was consumed
   });
 
+  it('Eject Button: a hit consumes the item and prompts a switch reminder', () => {
+    const chomp = entry('B', 0, 'Garchomp');
+    chomp.parsed.item = 'Eject Button';
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [entry('A', 0, 'Incineroar', ['Flare Blitz'])], leads: ['A0'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [chomp, entry('B', 1, 'Annihilape')], leads: ['B0'] },
+      events: [{ eventId: 't1', seq: 1, turn: 1, type: 'turn_start' }],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getAllByText, getByText, getByPlaceholderText } = render(<H />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Flare Blitz'));
+    fireEvent.change(getByPlaceholderText('hp after'), { target: { value: '120' } }); // damage, survives
+    fireEvent.click(getByText('Log action'));
+    expect(getByText(/Follow-up needed/)).toBeTruthy();
+    expect(getAllByText(/Eject Button/).length).toBeGreaterThan(0); // reminder to log the switch
+  });
+
   it('a Sitrus Berry already eaten does not heal again', () => {
     const chomp = entry('B', 0, 'Garchomp');
     chomp.parsed.item = 'Sitrus Berry';

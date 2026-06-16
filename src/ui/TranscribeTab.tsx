@@ -12,6 +12,7 @@ import {
   estimateDamage,
   fieldExpiryEvents,
   forfeitFromEvents,
+  holdsEjectPack,
   itemConsumed,
   megaFormeAbility,
   megaFormeFromItem,
@@ -28,6 +29,7 @@ import {
   nextEventId,
   oneHitSurvivor,
   reactiveDefenderEvents,
+  switchForcingOnHit,
   planTargets,
   protectionBlocking,
   slotOfMon,
@@ -76,6 +78,7 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
   const [manualFail, setManualFail] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [backfillNote, setBackfillNote] = useState<string | null>(null);
+  const [reminders, setReminders] = useState<string[]>([]);
 
   const currentTurn = useMemo(() => {
     const ts = ws.events.filter((e) => e.type === 'turn_start');
@@ -269,6 +272,8 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     const builders: Array<(seq: number, turn: number) => MatchEvent> = [
       (seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'move_used', user: actor, move, targets, isSpread: plan?.spread ?? false }),
     ];
+    // Player-choice follow-ups the user must log manually (forced switches) — surfaced after logging.
+    const newReminders: string[] = [];
     // A move can FAIL outright (deals nothing) when a conditional requirement isn't met.
     // Auto-detected cases + a manual override; any fail short-circuits the damage/status block.
     const entryTurn = ws.events
@@ -321,6 +326,16 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         if (canFlinch && o.flinch) builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: t, eventKind: 'flinch', outcome: 'yes' }));
         // Reactive defender items: Weakness Policy (SE), Cell Battery/Absorb Bulb/Snowball/Luminous Moss (by type), Air Balloon (pops).
         builders.push(...reactiveDefenderEvents(ws, t, move, effOf(t)?.mult ?? 1, dmg, after > 0));
+        // Switch-forcing items consumed on the hit (the actual switch is the player's choice → reminder).
+        if (dmg > 0 && after > 0) {
+          const forcing = switchForcingOnHit(ws, t); // null for a Focus Sash holder (item ≠ Eject Button/Red Card)
+          if (forcing) {
+            builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: t, kind: 'enditem', name: forcing }));
+            newReminders.push(forcing === 'Red Card'
+              ? `Red Card: ${monLabel(ws, t)} drags ${monLabel(ws, actor)} out — log ${monLabel(ws, actor)}'s switch (opponent picks the replacement).`
+              : `Eject Button: ${monLabel(ws, t)} is switched out — log its replacement.`);
+          }
+        }
         // Sitrus Berry: heals the defender at ≤50% HP (alive) — only if it hasn't already been eaten.
         if (after > 0 && dMax && monItem(ws, t) === 'Sitrus Berry' && after <= Math.floor(dMax / 2) && !itemConsumed(ws, t)) {
           const healed = Math.min(dMax, after + Math.floor(dMax / 4));
@@ -373,15 +388,27 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
         const o = outcomes[t];
         return !(plan?.isDamaging && (o?.missed || o?.ko));
       });
-      builders.push(...moveStatChangeEvents(ws, board, actor, move, statTargets));
+      // Realize the stat-change events so we can both log them and inspect for Eject Pack triggers.
+      const statEvents = moveStatChangeEvents(ws, board, actor, move, statTargets).map((b) => b(0, currentTurn));
+      for (const ev of statEvents) builders.push((seq, turn) => ({ ...ev, seq, turn }));
+      // Eject Pack: a stat lowered on its holder switches that mon out (player picks the replacement).
+      const dropped = new Set(statEvents.filter((e): e is Extract<MatchEvent, { type: 'stat_stage_change' }> => e.type === 'stat_stage_change' && e.stages < 0).map((e) => e.target));
+      for (const m of dropped) {
+        if (holdsEjectPack(ws, m)) {
+          builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: m, kind: 'enditem', name: 'Eject Pack' }));
+          newReminders.push(`Eject Pack: ${monLabel(ws, m)}'s stat drop switches it out — log its replacement.`);
+        }
+      }
     }
     emit(builders);
+    setReminders(newReminders);
     reset();
   };
 
   const doSwitch = (incoming: string) => {
     const slot = slotOfMon(board, actor!);
     if (!slot || !actor) return;
+    setReminders([]); // logging a switch resolves any pending forced-switch reminder
     const { side, position } = slotPosition(slot);
     const builders: Array<(seq: number, turn: number) => MatchEvent> = [];
     // Regenerator: the OUTGOING mon restores 1/3 max HP on switch-out (so it returns healthier).
@@ -501,6 +528,18 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
               ⟳ Re-derive effects
             </button>
             {backfillNote && <span className="muted" style={{ fontSize: 12 }}>{backfillNote}</span>}
+          </div>
+        )}
+
+        {reminders.length > 0 && (
+          <div className="panel" style={{ marginTop: 8, background: 'var(--panel2)', borderLeft: '3px solid var(--accent)' }}>
+            <div className="controls" style={{ marginTop: 0 }}>
+              <strong style={{ color: 'var(--accent)' }}>⚠ Follow-up needed</strong>
+              <button onClick={() => setReminders([])} title="Dismiss">✕</button>
+            </div>
+            {reminders.map((r, i) => (
+              <div key={i} className="muted" style={{ fontSize: 12, marginTop: 2 }}>• {r}</div>
+            ))}
           </div>
         )}
 

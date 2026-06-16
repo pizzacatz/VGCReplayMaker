@@ -486,6 +486,10 @@ export function megaFormeAbility(forme: string): string | undefined {
  */
 export function entryEffectEvents(ws: Workspace, monId: string, ability: string | undefined, board: ReplayState, includeIntimidate: boolean): EventBuilder[] {
   const out: EventBuilder[] = [];
+  // Air Balloon is announced when its holder enters (it pops later when hit).
+  if (monItem(ws, monId) === 'Air Balloon' && !itemConsumed(ws, monId)) {
+    out.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'item_or_ability_event', mon: monId, kind: 'item', name: 'Air Balloon' }));
+  }
   if (!ability) return out;
   if (includeIntimidate && ability === 'Intimidate') {
     const side = rosterSideOf(ws, monId);
@@ -699,6 +703,23 @@ export function reactiveDefenderEvents(ws: Workspace, defender: string, move: st
     if (tc && moveType(move) === tc.type) { enditem(); boost(tc.stat, 1); }
   }
   return out;
+}
+
+/**
+ * Switch-forcing items consumed when the holder is HIT by a damaging move:
+ * Eject Button (the holder switches out) and Red Card (the attacker is dragged
+ * out). The replacement is a player choice, so callers log the switch manually —
+ * this just identifies the item (to consume it + remind the user). Null if none.
+ */
+export function switchForcingOnHit(ws: Workspace, defender: string): 'Eject Button' | 'Red Card' | null {
+  const item = monItem(ws, defender);
+  if ((item === 'Eject Button' || item === 'Red Card') && !itemConsumed(ws, defender)) return item;
+  return null;
+}
+
+/** Whether a mon holds an un-used Eject Pack (switches it out when one of its stats is lowered). */
+export function holdsEjectPack(ws: Workspace, monId: string): boolean {
+  return monItem(ws, monId) === 'Eject Pack' && !itemConsumed(ws, monId);
 }
 function speciesTypes(species: string): string[] {
   try {
