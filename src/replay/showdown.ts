@@ -18,14 +18,17 @@ const PROTECTION_MOVES = new Set([
 /** Self-targeting boost abilities → announced as |-ability| before the boost. */
 const ABILITY_BOOST_SOURCES = new Set(['Defiant', 'Competitive', 'Guard Dog']);
 const FROM_ITEMS = new Set(['Leftovers', 'Black Sludge', 'Sitrus Berry', 'Rocky Helmet', 'Life Orb', 'Flame Orb', 'Toxic Orb', 'Binding Band', 'Air Balloon']);
-const FROM_ABILITIES = new Set(['Rough Skin', 'Iron Barbs', 'Poison Heal', 'Dry Skin']);
+const FROM_ABILITIES = new Set(['Rough Skin', 'Iron Barbs', 'Poison Heal', 'Dry Skin', 'Regenerator']);
 const FROM_STATUS: Record<string, string> = { Burn: 'brn', Poison: 'psn', Toxic: 'psn' }; // toxic damage is attributed to psn
+/** Partial-trapping moves — shown as a volatile that ends when the trapper leaves the field. */
+const PARTIAL_TRAP_MOVES = new Set(['Bind', 'Wrap', 'Fire Spin', 'Clamp', 'Whirlpool', 'Sand Tomb', 'Magma Storm', 'Infestation', 'Snap Trap', 'Thunder Cage']);
 
 /** Showdown's `[from]` attribution tag for a residual source (item: / ability: / status / move). */
 function fromTag(source: string): string {
   if (FROM_ITEMS.has(source)) return `[from] item: ${source}`;
   if (FROM_ABILITIES.has(source)) return `[from] ability: ${source}`;
   if (FROM_STATUS[source]) return `[from] ${FROM_STATUS[source]}`;
+  if (PARTIAL_TRAP_MOVES.has(source)) return `[from] move: ${source}`;
   return `[from] ${source}`;
 }
 const FIELD_CONDITIONS = new Set(['Electric Terrain', 'Grassy Terrain', 'Psychic Terrain', 'Misty Terrain', 'Trick Room', 'Gravity']);
@@ -47,6 +50,7 @@ export function toShowdownLog(log: MatchLog): string {
   const statusByMon = new Map<string, string>(); // monId → 'psn'/'tox'/'brn'/… — kept on the HP condition string
   let lastAttacker: string | undefined; // for |-miss| source
   let activeWeather: string | undefined; // for per-turn |-weather|…|[upkeep]
+  const traps = new Map<string, { target: string; move: string }>(); // trapper monId → its partial trap
   const place = (side: Side, pos: number, monId: string): string => {
     const slot = `${pside(side)}${ab(pos)}`;
     for (const [m, s] of slotByMon) if (s === slot) slotByMon.delete(m);
@@ -113,6 +117,10 @@ export function toShowdownLog(log: MatchLog): string {
           lines.push(`|move|${ident(ev.user)}|${ev.move}|${tgt}`);
         }
         if (PROTECTION_MOVES.has(ev.move)) lines.push(`|-singleturn|${ident(ev.user)}|${ev.move}`); // "protected itself!"
+        if (PARTIAL_TRAP_MOVES.has(ev.move) && ev.targets[0]) {
+          lines.push(`|-start|${ident(ev.targets[0])}|move: ${ev.move}`); // trap begins
+          traps.set(ev.user, { target: ev.targets[0], move: ev.move });
+        }
         lastAttacker = ev.user;
         return;
       }
@@ -135,6 +143,12 @@ export function toShowdownLog(log: MatchLog): string {
         lines.push(`|-heal|${ident(ev.target)}|${hpStr(ev.target, ev.hpAfter)}|${fromTag(ev.source)}`);
         return;
       case 'switch': {
+        // a partial trap ends when its TRAPPER leaves the field (or the trapped mon does)
+        if (ev.out) {
+          const t = traps.get(ev.out);
+          if (t) { lines.push(`|-end|${ident(t.target)}|move: ${t.move}`); traps.delete(ev.out); }
+          for (const [tr, info] of traps) if (info.target === ev.out) traps.delete(tr);
+        }
         place(ev.side, ev.position, ev.in);
         const sh = sheetOf(ev.in)!;
         const hp = hpByMon.get(ev.in) ?? sh.maxHp;
@@ -144,6 +158,7 @@ export function toShowdownLog(log: MatchLog): string {
       }
       case 'faint':
         statusByMon.delete(ev.target);
+        for (const [tr, info] of traps) if (tr === ev.target || info.target === ev.target) traps.delete(tr); // trap ends if trapper/target faints
         lines.push(`|faint|${ident(ev.target)}`);
         return;
       case 'status_applied': {
@@ -194,6 +209,8 @@ export function toShowdownLog(log: MatchLog): string {
           lines.push(`|cant|${ident(ev.mon)}|flinch`);
         } else if (ev.eventKind === 'cant') {
           lines.push(`|cant|${ident(ev.mon)}|${ev.outcome}`); // slp / par / frz
+        } else if (ev.eventKind === 'fail') {
+          lines.push(`|-fail|${ident(ev.mon)}`); // "But it failed!" (Fake Out turn 2, Protect chain, …)
         }
         return;
       }

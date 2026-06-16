@@ -51,6 +51,8 @@ const blankOutcome = (): TargetOutcome => ({ hpAfter: '', crit: false, flinch: f
 
 /** Sources emitted by end-of-turn residuals — used to detect "already applied this turn". */
 const END_OF_TURN_SOURCES = new Set(['Sandstorm', 'Leftovers', 'Black Sludge', 'Burn', 'Poison', 'Toxic', 'Poison Heal', 'Grassy Terrain']);
+/** Moves that only work on the user's FIRST turn out — they fail otherwise. */
+const FIRST_TURN_MOVES = new Set(['Fake Out', 'First Impression', 'Mat Block']);
 
 export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspace) => void }) {
   const diagnosis = useMemo(() => diagnoseLog(ws), [ws]);
@@ -235,6 +237,17 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     const builders: Array<(seq: number, turn: number) => MatchEvent> = [
       (seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'move_used', user: actor, move, targets, isSpread: plan?.spread ?? false }),
     ];
+    // First-turn-only moves (Fake Out, First Impression, Mat Block) FAIL if the user didn't just enter.
+    const entryTurn = ws.events
+      .filter((e): e is Extract<MatchEvent, { type: 'switch' }> => e.type === 'switch' && e.in === actor)
+      .reduce((mx, e) => Math.max(mx, e.turn), 1);
+    if (FIRST_TURN_MOVES.has(move) && entryTurn !== currentTurn) {
+      const user = actor;
+      builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'random_outcome', mon: user, eventKind: 'fail', outcome: 'yes' }));
+      emit(builders);
+      reset();
+      return;
+    }
     if (plan?.isDamaging) {
       const contact = moveMakesContact(move);
       const aMax = monMaxHp(ws, actor);
@@ -311,9 +324,16 @@ export function TranscribeTab({ ws, setWs }: { ws: Workspace; setWs: (w: Workspa
     const slot = slotOfMon(board, actor!);
     if (!slot || !actor) return;
     const { side, position } = slotPosition(slot);
-    const builders: Array<(seq: number, turn: number) => MatchEvent> = [
-      (seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'switch', side, position, out: actor, in: incoming }),
-    ];
+    const builders: Array<(seq: number, turn: number) => MatchEvent> = [];
+    // Regenerator: the OUTGOING mon restores 1/3 max HP on switch-out (so it returns healthier).
+    const outMax = monMaxHp(ws, actor);
+    const outHp = board.slots[slot]?.hp ?? outMax;
+    if (monAbility(ws, actor) === 'Regenerator' && outHp > 0 && outHp < outMax) {
+      const healed = Math.min(outMax, outHp + Math.floor(outMax / 3));
+      const t = actor;
+      builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'heal', target: t, source: 'Regenerator', hpBefore: outHp, hpAfter: healed }));
+    }
+    builders.push((seq, turn) => ({ eventId: nextEventId(), seq, turn, type: 'switch', side, position, out: actor, in: incoming }));
     builders.push(...entryEffectEvents(ws, incoming, monAbility(ws, incoming), board, true)); // Intimidate / weather on entry
     emit(builders);
     reset();
@@ -692,6 +712,7 @@ function describe(e: MatchEvent, label: (id: string) => string, sideName?: (s: '
       if (e.eventKind === 'miss') return `${label(e.mon)} avoided the attack (missed)`;
       if (e.eventKind === 'blocked') return `${label(e.mon)} protected itself (${e.outcome})`;
       if (e.eventKind === 'cant') return `${label(e.mon)} couldn’t move (${e.outcome})`;
+      if (e.eventKind === 'fail') return `${label(e.mon)}'s move failed`;
       return `${label(e.mon)} ${e.eventKind}: ${e.outcome}`;
   }
 }

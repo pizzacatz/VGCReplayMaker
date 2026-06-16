@@ -217,6 +217,33 @@ describe('toShowdownLog', () => {
     expect(out).not.toContain('150/183 brn');
   });
 
+  it('Infestation: trap starts on use, ends when the trapper switches out, chip is [from] move:', () => {
+    const out = toShowdownLog({
+      ...LOG,
+      events: [
+        { eventId: 'm', seq: 1, turn: 1, type: 'move_used', user: 'inc', move: 'Infestation', targets: ['gar'] },
+        { eventId: 'd', seq: 2, turn: 1, type: 'damage', attacker: 'inc', move: 'Infestation', defender: 'gar', hpBefore: 183, hpAfter: 170, crit: false, status: 'clean' },
+        { eventId: 'tick', seq: 3, turn: 1, type: 'passive_hp_change', target: 'gar', source: 'Infestation', hpBefore: 170, hpAfter: 159 },
+        { eventId: 'sw', seq: 4, turn: 2, type: 'switch', side: 'A', position: 0, out: 'inc', in: 'cha' },
+      ],
+    });
+    expect(out).toContain('|-start|p2a: Garchomp|move: Infestation'); // trap begins
+    expect(out).toContain('|-damage|p2a: Garchomp|159/183|[from] move: Infestation'); // tick attributed to the move
+    expect(out).toContain('|-end|p2a: Garchomp|move: Infestation'); // undone when Incineroar leaves
+    expect(out.indexOf('|-end|p2a: Garchomp|move: Infestation')).toBeLessThan(out.indexOf('|switch|p1a: Charizard'));
+  });
+
+  it('a failed move renders |-fail|', () => {
+    const out = toShowdownLog({
+      ...LOG,
+      events: [
+        { eventId: 'm', seq: 1, turn: 1, type: 'move_used', user: 'inc', move: 'Fake Out', targets: ['gar'] },
+        { eventId: 'f', seq: 2, turn: 1, type: 'random_outcome', mon: 'inc', eventKind: 'fail', outcome: 'yes' },
+      ],
+    });
+    expect(out).toContain('|-fail|p1a: Incineroar');
+  });
+
   it('renders a faint HP as "0 fnt"', () => {
     const koLog = toShowdownLog({ ...LOG, events: [{ eventId: 'd', seq: 1, turn: 1, type: 'damage', attacker: 'inc', move: 'Flare Blitz', defender: 'gar', hpBefore: 183, hpAfter: 0, crit: false, status: 'clean' }] });
     expect(koLog.includes('|-damage|p2a: Garchomp|0 fnt')).toBe(true);

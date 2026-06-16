@@ -176,6 +176,45 @@ describe('TranscribeTab does not crash on interaction', () => {
     expect(getByText(/\(Toxic\)/)).toBeTruthy(); // end-of-turn poison tick now derives
   });
 
+  it('Fake Out on turn 2 auto-logs a failure', () => {
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [entry('A', 0, 'Incineroar', ['Fake Out'])], leads: ['A0'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [{ eventId: 't1', seq: 1, turn: 1, type: 'turn_start' }, { eventId: 't2', seq: 2, turn: 2, type: 'turn_start' }],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getAllByText, getByText } = render(<H />);
+    fireEvent.click(getAllByText('Incineroar').at(-1)!);
+    fireEvent.click(getByText('Fake Out'));
+    fireEvent.click(getByText('Log action'));
+    expect(getByText(/move failed/)).toBeTruthy();
+  });
+
+  it('Regenerator heals 1/3 when the mon switches out', () => {
+    const tox = entry('A', 0, 'Toxapex');
+    tox.parsed.ability = 'Regenerator';
+    const ws: Workspace = {
+      sideA: { player: 'You', rawPaste: '', mons: [tox, entry('A', 1, 'Zapdos'), entry('A', 2, 'Aerodactyl')], leads: ['A0', 'A1'] },
+      sideB: { player: 'Opp', rawPaste: '', mons: [entry('B', 0, 'Garchomp')], leads: ['B0'] },
+      events: [
+        { eventId: 't1', seq: 1, turn: 1, type: 'turn_start' },
+        { eventId: 'd', seq: 2, turn: 1, type: 'damage', attacker: 'B0', move: 'Earthquake', defender: 'A0', hpBefore: 175, hpAfter: 100, crit: false, status: 'clean' },
+      ],
+    };
+    function H() {
+      const [w, setW] = useState(ws);
+      return <TranscribeTab ws={w} setWs={setW} />;
+    }
+    const { getAllByText, getByText } = render(<H />);
+    fireEvent.click(getAllByText('Toxapex').at(-1)!); // active actor
+    fireEvent.click(getByText('Switch out ↔'));
+    fireEvent.click(getByText('Aerodactyl')); // bring in the bench mon
+    expect(getByText(/Regenerator/)).toBeTruthy(); // heal event logged
+  });
+
   it('the Faint button marks a Pokémon fainted', () => {
     const { getAllByText, getByText } = render(<Harness />);
     fireEvent.click(getAllByText('Incineroar').at(-1)!);
