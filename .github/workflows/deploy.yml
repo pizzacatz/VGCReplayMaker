@@ -1,24 +1,26 @@
-name: Deploy to Netlify
+name: Deploy to GitHub Pages
 
-# Push to main → typecheck, test, build, and publish to the production Netlify site.
-# No manual `netlify deploy` needed. The site id is public; only the auth token is a
-# repo secret (Settings → Secrets and variables → Actions → NETLIFY_AUTH_TOKEN).
+# Push to main → typecheck, test, build, and publish to GitHub Pages.
+# Live at https://pizzacatz.github.io/VGCReplayMaker/. No secrets required —
+# Pages auth is handled by the workflow's OIDC token (id-token: write).
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 concurrency:
-  group: netlify-production
+  group: pages
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    env:
-      NETLIFY_SITE_ID: 07f1e826-07c9-4cf5-825d-08d9525546ad
-      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,5 +31,17 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - name: Deploy to Netlify (production)
-        run: npx --yes netlify-cli deploy --prod --dir=dist --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
