@@ -1,6 +1,6 @@
 {
   "name": "vgc-replay-maker",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Single-user Pokémon Champions (Reg M-A / VGC) match transcription, Stat Point reverse-engineering, and replay tool",
   "type": "module",

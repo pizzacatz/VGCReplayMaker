@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { type Workspace } from './model';
 import { parseShowdownReplay } from '../import';
+import { APP_VERSION, APP_UPDATED } from '../version';
 import {
   activeGame,
   activeMatch,
@@ -212,6 +213,10 @@ export function App() {
         {tab === 'solve' && <SolveTab ws={ws} store={store} setStore={setStore} />}
         {tab === 'replay' && <ReplayTab ws={ws} />}
       </ErrorBoundary>
+
+      <footer className="muted" style={{ textAlign: 'center', marginTop: 24, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 12 }}>
+        Champions Match Analysis · v{APP_VERSION} · updated {APP_UPDATED}
+      </footer>
     </div>
   );
 }
